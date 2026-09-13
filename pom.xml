@@ -3,7 +3,7 @@
   <modelVersion>4.0.0</modelVersion>
 
   <groupId>io.github.pandeyayushk</groupId>
-  <artifactId>JobStream</artifactId>
+  <artifactId>jobstream</artifactId>
   <version>1.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
@@ -12,15 +12,32 @@
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <java.version>21</java.version>
+    <maven.compiler.release>21</maven.compiler.release>
   </properties>
 
   <dependencies>
     <dependency>
-      <groupId>junit</groupId>
-      <artifactId>junit</artifactId>
-      <version>3.8.1</version>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>5.10.0</version>
       <scope>test</scope>
     </dependency>
+      <dependency>
+          <groupId>junit</groupId>
+          <artifactId>junit</artifactId>
+          <version>RELEASE</version>
+          <scope>test</scope>
+      </dependency>
   </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+            </plugin>
+        </plugins>
+    </build>
+
 </project>

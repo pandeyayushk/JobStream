@@ -12,12 +12,12 @@ This repository provides a clean starting point for developing JobStream increme
 
 ## Current status
 
-- Maven project configured as `io.github.pandeyayushk:JobStream:1.0-SNAPSHOT`.
+- Maven project configured as `io.github.pandeyayushk:jobstream:1.0-SNAPSHOT`.
 - Java 21 configured in `pom.xml`.
 - Application entry point: `io.github.pandeyayushk.jobstream.Main`.
 - Current output: `JobStream starting...`.
 - A smoke-test entry point exists at `src/test/java/.../MainTest.java`; it prints `Testing...` when run directly.
-- `mvn test` currently succeeds, but executes **zero assertions/tests** because `MainTest` does not yet contain JUnit test methods.
+- `mvn test` currently succeeds the StartingJobStream test
 
 ## Requirements
 
