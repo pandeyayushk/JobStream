@@ -1,14 +1,14 @@
-# ForgeFlow
+# JobStream
 
-ForgeFlow is an early-stage Java application scaffold. The current Maven artifact and Java package still use the earlier `JobStream` name; this README uses **ForgeFlow** as the product name.
+JobStream is an early-stage Java application scaffold for building job-stream workflows.
 
 ## What is it?
 
-ForgeFlow is intended to be a Java-based application for building a job-stream workflow. At the moment, its implemented behavior is deliberately minimal: it starts from a single `Main` class and prints a startup message.
+JobStream is intended to be a Java-based application for building job-stream workflows. At the moment, its implemented behavior is deliberately minimal: it starts from a single `Main` class and prints a startup message.
 
 ## Why am I building it?
 
-This repository provides a clean starting point for developing ForgeFlow incrementally: Maven supplies a standard project layout, Java 21 is the target runtime, and a test source set is already in place. The product workflow, integrations, and user-facing features have not been implemented yet.
+This repository provides a clean starting point for developing JobStream incrementally: Maven supplies a standard project layout, Java 21 is the target runtime, and a test source set is already in place. The product workflow, integrations, and user-facing features have not been implemented yet.
 
 ## Current status
 
