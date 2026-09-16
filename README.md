@@ -1,72 +1,120 @@
 # JobStream
 
-JobStream is an early-stage Java application scaffold for building job-stream workflows.
+A learning-oriented, production-minded distributed job queue written in Java, backed by Redis.
 
-## What is it?
+## What is JobStream?
 
-JobStream is intended to be a Java-based application for building job-stream workflows. At the moment, its implemented behavior is deliberately minimal: it starts from a single `Main` class and prints a startup message.
+JobStream is a distributed job queue system designed to explore and implement core concepts of distributed systems: job lifecycle management, persistent queuing, concurrent worker processing, retry mechanisms, and operational observability.
 
-## Why am I building it?
+The project is being built incrementally, phase by phase, with thorough documentation guiding every step.
 
-This repository provides a clean starting point for developing JobStream incrementally: Maven supplies a standard project layout, Java 21 is the target runtime, and a test source set is already in place. The product workflow, integrations, and user-facing features have not been implemented yet.
+## Current Status
 
-## Current status
+**Phase 0 — Project Foundation** (complete)
 
-- Maven project configured as `io.github.pandeyayushk:jobstream:1.0-SNAPSHOT`.
-- Java 21 configured in `pom.xml`.
-- Application entry point: `io.github.pandeyayushk.jobstream.Main`.
-- Current output: `JobStream starting...`.
-- A smoke-test entry point exists at `src/test/java/.../MainTest.java`; it prints `Testing...` when run directly.
-- `mvn test` currently succeeds the StartingJobStream test
+- Maven project: `io.github.pandeyayushk:jobstream:1.0-SNAPSHOT`
+- Java 21 LTS, JUnit 5
+- Application entry point: `io.github.pandeyayushk.jobstream.Main`
+- Current output: `JobStream starting...`
+- Smoke test passing
+
+No job queue features are implemented yet. The system is in its foundational scaffolding stage.
+
+## Technology Stack
+
+| Component       | Technology           |
+|-----------------|----------------------|
+| Language        | Java 21 LTS          |
+| Build System    | Apache Maven         |
+| Testing         | JUnit 5              |
+| Persistence     | Redis (planned)      |
+| Queue Backend   | Redis (planned)      |
 
 ## Requirements
 
 - JDK 21
-- Apache Maven 3.8 or newer
-
-Confirm both are available:
+- Apache Maven 3.8+
 
 ```powershell
 java -version
 mvn -version
 ```
 
-## How to build
-
-From the repository root:
+## Build
 
 ```powershell
 mvn package
 ```
 
-Maven compiles the application and creates a JAR under `target/`.
-
-## How to test
-
-Run the Maven test lifecycle:
+## Test
 
 ```powershell
 mvn test
 ```
 
-To run the current standalone smoke-test class and see its output:
-
-```powershell
-mvn test-compile
-java -cp target/test-classes io.github.pandeyayushk.jobstream.MainTest
-```
-
-## How to run
-
-Compile the application, then invoke its entry point:
+## Run
 
 ```powershell
 mvn compile
 java -cp target/classes io.github.pandeyayushk.jobstream.Main
 ```
 
-Expected output:
+Expected output: `JobStream starting...`
 
-```text
-JobStream starting...
+## Documentation
+
+JobStream uses a structured documentation system to guide development:
+
+| Directory                | Purpose                                      |
+|--------------------------|----------------------------------------------|
+| `docs/requirements/`     | What the system must do                      |
+| `docs/architecture/`     | How the system is structured                 |
+| `docs/decisions/`        | Why architectural choices were made (ADRs)   |
+| `docs/versions/`         | Phase-by-phase implementation guides         |
+
+### Key Documents
+
+- [Project Structure](docs/architecture/project-structure.md) — Canonical package and repository layout
+- [System Overview](docs/architecture/system-overview.md) — High-level architecture
+- [Job Lifecycle](docs/architecture/job-lifecycle.md) — Job states and transitions
+- [ADR Index](docs/decisions/README.md) — Architecture decision records
+
+## Development Roadmap
+
+| Phase | Name                        | Status    |
+|-------|-----------------------------|-----------|
+| 0     | Project Foundation          | ✅ Complete |
+| 1     | Domain Model                | Planned   |
+| 2     | Serialization & Persistence | Planned   |
+| 3     | Queue System                | Planned   |
+| 4     | Worker Foundation           | Planned   |
+| 5     | Execution Engine            | Planned   |
+| 6     | Reliability & Retry         | Planned   |
+| 7     | CLI                         | Planned   |
+| 8     | Scheduling & Priority       | Planned   |
+| 9     | Observability & HTTP API    | Planned   |
+| 10    | Deployment & Hardening      | Planned   |
+
+Each phase has a detailed guide in `docs/versions/`. See those guides for prerequisites, requirements, file manifests, and validation criteria.
+
+## Development Philosophy
+
+JobStream follows a **build-first** approach:
+
 ```
+READ → UNDERSTAND → DESIGN → IMPLEMENT → TEST → REVIEW → VALIDATE → MERGE
+```
+
+The documentation guides the developer through each phase. AI assistance is reserved for architecture review, debugging, concurrency problems, and design trade-offs — not for routine questions about what to build next.
+
+## Git Workflow
+
+```
+master (stable milestones)
+  └── phase-N-name (implementation branch)
+       └── implement → test → review → validate → merge
+```
+
+## License
+
+This project is a personal learning and portfolio project.
