@@ -5,7 +5,7 @@ import java.util.Optional;
 
 ;
 
-public class Payload {
+public final class Payload {
     private final Map<String,Object> map;
     /**
      * Creates an empty Payload.
