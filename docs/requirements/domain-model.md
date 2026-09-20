@@ -2,68 +2,54 @@
 
 ## 1. Purpose
 
-Defines the core logical entities for the job domain: what a `Job` is, how it is identified, how its lifecycle states are represented, and what its execution data (`Payload`) means, completely independent of serialization, storage, or execution infrastructure.
+Defines the core job-domain API independently of serialization, storage, queueing, and execution infrastructure.
 
----
+## 2. `JobId`
 
-## 2. Functional Requirements
+`io.github.pandeyayushk.jobstream.job.JobId` is a Java record wrapping a non-null `UUID`. It provides `generate()`, `fromString(String)`, the record accessor `value()`, `toString()`, and record equality/hash-code semantics.
 
-### 2.1 Job Identity (`JobId`)
-- A Job must have a globally unique, immutable identity (`JobId`).
-- Must wrap a standard `UUID` to ensure type safety (preventing accidental parameter swaps with worker IDs or queue names).
-- Must support string serialization and deserialization (`JobId.fromString(...)`, `toString()`).
-- Value object semantics: equality and hash code based strictly on the wrapped UUID.
+## 3. `JobStatus`
 
-### 2.2 Job Status (`JobStatus`)
-- A Job must have a status representing its current state within the domain lifecycle.
-- The `JobStatus` enum defines the complete closed set of 7 states as the system-wide domain vocabulary:
-  `PENDING`, `QUEUED`, `PROCESSING`, `COMPLETED`, `FAILED`, `RETRYING`, `DEAD`.
-- Must provide transition validation logic (e.g. `isValidTransition(JobStatus target)`).
-- *Phase boundary rule:* Defining the states in the domain model does **not** imply that Phase 1 can execute or enqueue jobs. Subsystems causing transitions are implemented in their respective phases.
+`io.github.pandeyayushk.jobstream.job.JobStatus` defines the closed lifecycle vocabulary: `PENDING`, `QUEUED`, `PROCESSING`, `COMPLETED`, `FAILED`, `RETRYING`, and `DEAD`. It provides `isTerminal()` and `isValidTransition(JobStatus target)`. Legal transitions are defined by [the lifecycle matrix](../architecture/job-lifecycle.md); all other transitions are rejected.
 
-### 2.3 Job Payload (`Payload`)
-- A Job must carry a `Payload` representing the domain input data required for execution.
-- **Stable Domain Contract:** `Payload` is an immutable, key-value data structure encapsulating a `Map<String, Object>`.
-- Must provide type-safe accessors (e.g., `getString(key)`, `getInt(key)`, `getBoolean(key)`, `asMap()`).
-- Must enforce immutability at construction via defensive copying (`Map.copyOf`).
-- Must reject null keys or null payload maps.
-- **Separation of Concerns:** The domain model does **not** define or care how this payload is encoded on the wire or disk (no JSON, no Jackson annotations, no byte arrays).
+Phase 1 defines and validates this lifecycle contract only. The later queue, worker, execution, reliability, and operator subsystems trigger the corresponding transitions.
 
-### 2.4 Job Entity (`Job`)
-- The primary domain entity representing a unit of work.
-- Attributes:
-  - `JobId id` (mandatory, immutable)
-  - `String type` (mandatory, non-empty, represents the work category, e.g. `"email:send"`)
-  - `JobStatus status` (mandatory, initial state: `PENDING`)
-  - `Payload payload` (mandatory, immutable)
-  - `Instant createdAt` (mandatory, UTC timestamp of creation)
-  - `Instant updatedAt` (mandatory, UTC timestamp of last status change)
-  - `Map<String, String> metadata` (optional key-value metadata for tracing/correlation)
-- Must provide controlled lifecycle transition methods (e.g., `withStatus(JobStatus newStatus)`) returning a new or updated instance with updated timestamp.
+## 4. `Payload`
 
----
+`io.github.pandeyayushk.jobstream.payload.Payload` is an immutable final domain value-object class backed by `Map<String, Object>`, not a Java record. Its public API is:
 
-## 3. Non-Functional Requirements
+- `Payload.of(Map<String, Object>)`
+- `Payload.empty()`
+- `Optional<String> getString(String)`
+- `Optional<Integer> getInt(String)`
+- `Optional<Boolean> getBoolean(String)`
+- `Map<String, Object> asMap()`
+- `boolean containsKey(String)`
 
-- **Zero Infrastructure Dependencies:** Core domain classes must not import or depend on Redis, Jackson, Jedis, Spring, configuration loaders, or database drivers.
-- **Thread Safety:** Domain objects must be thread-safe through immutability or controlled state transition methods.
-- **Strict Validation:** Fail-fast on invalid state (null IDs, empty types, null payloads, illegal state transitions).
+Payload defensively copies supplied data using `Map.copyOf(...)`; its exposed map is immutable. Null input maps and null keys are rejected. Missing keys and values requested through an incompatible typed accessor return `Optional.empty()`.
 
----
+Payload is domain-only. It has no JSON, Jackson, Redis, byte-array, or persistence knowledge. Serialization is Phase 2 responsibility.
 
-## 4. Design Decisions (Phase 1 Ownership)
+## 5. `Job`
 
-- **Job Representation:** Record vs Class. If a class is chosen, ensure the core fields (`id`, `type`, `payload`, `createdAt`) are immutable, and status updates are strictly controlled.
-- **Payload Representation:** Encapsulated immutable Map-based domain value object.
+`io.github.pandeyayushk.jobstream.job.Job` is an immutable final Java entity class identified by `JobId`. Its accessors are:
 
----
+- `JobId id()`
+- `String type()`
+- `JobStatus status()`
+- `Payload payload()`
+- `Instant createdAt()`
+- `Instant updatedAt()`
+- `Map<String, String> metadata()`
 
-## 5. Dependencies
+Its construction and lifecycle API is:
 
-- **None** (Core Domain depends only on the Java 21 Standard Library).
+- `Job.create(String type, Payload payload)` generates an ID, starts in `PENDING`, assigns the same initial `Instant` to both timestamps, and creates empty metadata.
+- `Job.reconstitute(JobId id, String type, JobStatus status, Payload payload, Instant createdAt, Instant updatedAt, Map<String, String> metadata)` preserves the supplied persisted state without generating identity or timestamps and without resetting status.
+- `Job.withStatus(JobStatus newStatus)` validates the transition through `JobStatus.isValidTransition(...)` and returns a new `Job`. It retains the ID, type, payload, creation time, and metadata while updating status and `updatedAt`.
 
----
+Job validates non-null ID, status, payload, creation time, and update time; type must be non-null and non-blank. Metadata is defensively copied with `Map.copyOf(...)` and is immutable when returned. A transition never mutates the original instance.
 
-## 6. Phase Ownership
+## 6. Dependencies
 
-- **Phase 1 (Domain Model):** Establishes `Job`, `JobId`, `JobStatus`, and `Payload`.
+The production domain depends only on the Java standard library. It must not depend on Redis, Jackson, persistence drivers, configuration loaders, queueing, networking, or execution frameworks. JUnit 5 is retained as the test dependency.

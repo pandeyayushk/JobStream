@@ -78,4 +78,4 @@ To protect system integrity, the following transitions are strictly illegal and 
 2. **Strict Unidirectionality:** Lifecycle moves forward along defined pathways. There are no reverse transitions except the explicit `RETRYING → QUEUED` and administrative `DEAD → QUEUED`.
 3. **Only `QUEUED` Jobs are Claimable:** A worker thread may only claim and transition a job from `QUEUED` to `PROCESSING`.
 4. **State Transition Atomicity:** In a distributed multi-worker environment, status updates in `JobRepository` must be atomic to avoid race conditions (e.g. two workers claiming the same job).
-5. **Phase 1 Responsibility Boundary:** Phase 1 defines the `JobStatus` enum and validation methods (e.g. `isValidTransition(from, to)`). Phase 1 **does not** execute jobs, enqueue jobs, or claim jobs.
+5. **Phase 1 Responsibility Boundary:** Phase 1 defines the `JobStatus` enum and validates a proposed target through `isValidTransition(JobStatus target)`. Phase 1 **does not** execute jobs, enqueue jobs, or claim jobs.

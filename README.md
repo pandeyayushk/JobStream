@@ -10,15 +10,15 @@ The project is being built incrementally, phase by phase, with thorough document
 
 ## Current Status
 
-**Phase 0 — Project Foundation** (complete)
+**Phase 1 — Domain Model** (complete)
 
 - Maven project: `io.github.pandeyayushk:jobstream:1.0-SNAPSHOT`
 - Java 21 LTS, JUnit 5
 - Application entry point: `io.github.pandeyayushk.jobstream.Main`
-- Current output: `JobStream starting...`
-- Smoke test passing
+- Domain model: `JobId`, `JobStatus`, `Payload`, and `Job`
+- Phase 0 smoke test and Phase 1 domain tests passing
 
-No job queue features are implemented yet. The system is in its foundational scaffolding stage.
+No persistence, queue, worker, execution, retry, or operational features are implemented yet.
 
 ## Technology Stack
 
@@ -84,7 +84,7 @@ JobStream uses a structured documentation system to guide development:
 | Phase | Name                        | Status    |
 |-------|-----------------------------|-----------|
 | 0     | Project Foundation          | ✅ Complete |
-| 1     | Domain Model                | Planned   |
+| 1     | Domain Model                | ✅ Complete |
 | 2     | Serialization & Persistence | Planned   |
 | 3     | Queue System                | Planned   |
 | 4     | Worker Foundation           | Planned   |
