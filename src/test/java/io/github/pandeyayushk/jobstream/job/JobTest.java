@@ -4,6 +4,7 @@ import io.github.pandeyayushk.jobstream.payload.Payload;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -72,6 +73,64 @@ public class JobTest {
 
         assertThrowsExactly(IllegalStateException.class,()->
                 completedJob.withStatus(JobStatus.QUEUED)
+        );
+    }
+
+    @Test
+    public void reconstitutePreservesState() {
+        JobId id = JobId.generate();
+        String type = "email:send";
+        JobStatus status = JobStatus.PROCESSING;
+        Payload payload = Payload.empty();
+        Instant createdAt = Instant.parse("2026-09-20T10:00:00Z");
+        Instant updatedAt = Instant.parse("2026-09-20T11:00:00Z");
+
+        Map<String, String> metadata = Map.of(
+                "source", "api",
+                "priority", "high"
+        );
+
+        Job job = Job.reconstitute(
+                id,
+                type,
+                status,
+                payload,
+                createdAt,
+                updatedAt,
+                metadata
+        );
+
+        assertEquals(id, job.id());
+        assertEquals(type, job.type());
+        assertEquals(status, job.status());
+        assertEquals(payload, job.payload());
+        assertEquals(createdAt, job.createdAt());
+        assertEquals(updatedAt, job.updatedAt());
+        assertEquals(metadata, job.metadata());
+    }
+
+    @Test
+    public void metadataIsImmutable() {
+        Map<String, String> originalMetadata = new HashMap<>();
+        originalMetadata.put("source", "api");
+
+        Job job = Job.reconstitute(
+                JobId.generate(),
+                "email:send",
+                JobStatus.PENDING,
+                Payload.empty(),
+                Instant.now(),
+                Instant.now(),
+                originalMetadata
+        );
+
+        originalMetadata.put("source", "worker");
+
+        assertEquals("api", job.metadata().get("source"));
+
+        assertThrowsExactly(
+                UnsupportedOperationException.class,
+                () -> job.metadata().put("priority", "high")
         );
     }
 }
