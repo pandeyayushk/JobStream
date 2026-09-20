@@ -92,18 +92,20 @@ The core domain (`job`, `payload`) represents pure business concepts. It must re
 
 ### Package Responsibilities & Allowed Dependencies
 
-*Note: The interfaces/classes listed below are planned for their respective phases, not yet implemented.*
+*Note: The interfaces/classes listed below are planned for their respective phases unless explicitly marked implemented.*
 
 - **`io.github.pandeyayushk.jobstream.job`**
   - **Responsibility:** Core domain entity (`Job`), unique identity (`JobId`), and complete lifecycle state contract (`JobStatus`).
   - **Phase Introduced:** Phase 1
-  - **Planned Types:** `Job`, `JobId`, `JobStatus`
+  - **Status:** Implemented in Phase 1
+  - **Implemented Types:** `Job`, `JobId`, `JobStatus`
   - **Allowed Dependencies:** **None** (Pure Java Standard Library only).
 
 - **`io.github.pandeyayushk.jobstream.payload`**
   - **Responsibility:** Domain payload abstraction representing structured execution parameters.
   - **Phase Introduced:** Phase 1
-  - **Planned Types:** `Payload`
+  - **Status:** Implemented in Phase 1
+  - **Implemented Types:** `Payload`
   - **Allowed Dependencies:** **None** (Pure Java Standard Library only).
 
 - **`io.github.pandeyayushk.jobstream.serialization`**
@@ -186,9 +188,10 @@ The core domain (`job`, `payload`) represents pure business concepts. It must re
 2. **Mirroring in Tests:** Test packages in `src/test/java` must mirror production packages in `src/main/java` exactly.
 3. **No Premature Directory Creation:** Directories must not be created in `src/` until the phase introducing that package is actively implemented.
 
-## Current State (Phase 0)
+## Current State (Phase 1)
 
-Currently, the project is in Phase 0.
-- Only the root package exists with `Main.java`.
-- Only `MainTest.java` exists in the test tree.
-- **No domain, infrastructure, or operational packages have been created yet.**
+Phase 1 is complete.
+- The root package contains `Main.java` and the Phase 0 smoke test.
+- The `job` package contains `Job`, `JobId`, and `JobStatus`, with Phase 1 unit tests.
+- The `payload` package contains `Payload`, with Phase 1 unit tests.
+- Infrastructure and operational packages remain future architecture.
