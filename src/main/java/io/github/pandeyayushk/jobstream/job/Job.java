@@ -50,4 +50,33 @@ public final class Job {
          Instant updatedAt=Instant.now();
          return new Job(id,type,newStatus,payload,createdAt,updatedAt,metadata);
     }
+
+
+    public JobId id() {
+        return id;
+    }
+
+    public String type() {
+        return type;
+    }
+
+    public JobStatus status() {
+        return status;
+    }
+
+    public Payload payload() {
+        return payload;
+    }
+
+    public Instant createdAt() {
+        return createdAt;
+    }
+
+    public Instant updatedAt() {
+        return updatedAt;
+    }
+
+    public Map<String, String> metadata() {
+        return metadata;
+    }
 }
