@@ -12,4 +12,5 @@ public interface JobRepository {
     Optional<Job> findById(JobId id);
     boolean delete(JobId id);
     List<Job> findByStatus(JobStatus status);
+    boolean exists(JobId id);
 }
