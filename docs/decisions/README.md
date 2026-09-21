@@ -25,7 +25,7 @@ Each ADR should follow this structure:
 
 ## Index of ADRs
 - [ADR-001: Use Java 21 LTS and Maven as the Foundation](ADR-001-java-21-and-maven.md)
-- [ADR-002: Use Redis as the Persistence and Queue Backend](ADR-002-redis-as-persistence-and-queue-backend.md)
+- [ADR-002: Use Redis as the Persistence and Queue Backend](ADR-002-redis-as-persistence-and-queue-backend.md) — Accepted for Phase 2 persistence; queue backend deferred
 - [ADR-003: Job Entity Representation and Immutability](ADR-003-job-entity-representation-and-immutability.md)
 - [ADR-004: Domain Payload Contract](ADR-004-domain-payload-contract.md)
 
