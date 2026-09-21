@@ -1,86 +1,50 @@
 # ADR-002: Use Redis as the Persistence and Queue Backend
 
-- **Status:** Proposed
+- **Status:** Accepted for Phase 2 persistence; queue backend decision deferred
 - **Date:** 2026-09-17
 - **Deciders:** Engineering Architecture
 
 ---
 
-## 1. Architectural Intent vs. Implementation Decision
+## 1. Context
 
-A clear distinction must be maintained between **architectural intent** and an **accepted implementation decision**:
+JobStream needs durable storage for complete job state indexed by `JobId`. Phase 2 implements that persistence responsibility with Redis. Queue dispatch, workers, retries, and other queue concerns are outside the implemented Phase 2 scope and must not be inferred from this decision.
 
-- **Architectural Intent:** JobStream is designed conceptually around Redis to explore whether a single, in-memory, high-performance data store can fulfill both persistent record storage and queue dispatch duties without introducing secondary brokers (e.g. RabbitMQ or Kafka).
-- **Implementation Decision (Deferred):** The formal acceptance of Redis as the production backend remains **PROPOSED**. It will only be accepted in Phase 2 (Persistence) and Phase 3 (Queue) after validating performance, durability guarantees (AOF/RDB), client library behavior (Jedis connection pooling vs Lettuce async), and transactional atomicity.
+## 2. Decision
 
----
+Use Redis for Phase 2 job persistence with Jedis 8.0.1 `RedisClient`. `RedisJobRepository` receives an already-created client through constructor injection; it does not create or own the client, and `JedisPool` is not used.
 
-## 2. Context & Problem Statement
+Jobs are serialized as JSON by the Jackson Databind 3.2.2 serializer and stored using this schema:
 
-JobStream requires two fundamental storage capabilities:
-1. **Durable Job State Storage (Repository):** A key-value or document store where full job entities are indexed by `JobId` (`JobId -> Job record`).
-2. **Queueing & Distribution Mechanism (Queue):** A FIFO ordering queue supporting atomic, blocking dequeue (`Queue -> JobId`) across multiple concurrent workers.
+```
+jobstream:job:<uuid>
+       |
+       +--> JSON Job record
 
-The engineering challenge is determining whether Redis can reliably fulfill both roles simultaneously while meeting reliability and distributed safety constraints.
+jobstream:status:<STATUS>
+       |
+       +--> Set<JobId>
+```
 
----
+The Job record is authoritative. The status sets are secondary indexes. `findByStatus` uses `SMEMBERS` and loads the referenced records, skipping missing records rather than using `KEYS *`.
 
-## 3. Proposed Responsibilities for Redis
+`save` maintains the status index by removing a job ID from its previous status set when its stored status changes, then adding it to the current set. `delete` removes the authoritative record and its status index entry.
 
-Under this proposed architecture, Redis will be responsible for:
-1. **Job Record Persistence (`jobstream:job:{id}`):** Storing serialized JSON job representations.
-2. **FIFO Active Queues (`jobstream:queue:{name}`):** Redis Lists (`LPUSH` / `BRPOP`) holding `JobId` references.
-3. **Worker Registry & Liveness (`jobstream:worker:{id}`):** Tracking active worker instances with key expiration (TTL) for heartbeats.
-4. **Dead-Letter Queue (`jobstream:queue:dead-letter`):** Holding `JobId`s of jobs that exhausted all retry attempts.
-5. **Scheduled & Priority Queues (`jobstream:schedule`):** Redis Sorted Sets (`ZSET`) where score is execution timestamp or priority level.
+Redis/Jedis errors at the repository boundary are translated to `PersistenceException`. Development and integration tests use a real Redis server at `localhost:6379` run through Docker; the application does not provision or manage that server.
 
----
+## 3. Consequences
 
-## 4. Benefits
+- Full job state is available through a simple key lookup, while status queries avoid a full key scan.
+- The pure domain model remains independent of Redis and Jackson.
+- Redis persistence depends on the operational Redis configuration for durability across Redis restarts; Phase 2 does not validate AOF/RDB durability settings.
+- `save` is currently multiple Redis operations, not an atomic transaction. A crash may leave the status index inconsistent with the authoritative job record, and concurrent read-modify-write status changes are not yet hardened. These are deferred production-hardening concerns.
 
-- **Unified Infrastructure:** Operators manage a single external infrastructure component instead of separate database and message broker technologies.
-- **Native Queue Primitives:** Redis lists natively support atomic, blocking pops (`BRPOP`), eliminating busy-wait polling loops and external synchronization.
-- **Sorted Sets for Scheduling & Priority:** `ZSET` commands (`ZADD`, `ZRANGEBYSCORE`) naturally solve time-delayed scheduling without custom interval trees.
-- **High Throughput & In-Memory Speed:** Sub-millisecond latency for queue operations and job state queries.
-- **Atomic Operations:** Single commands (`LPUSH`, `RPOP`, `HSET`) and transactional blocks (`MULTI`/`EXEC` or Lua scripts) provide atomic boundaries.
+## 4. Deferred Queue Decision
 
----
+Redis is not yet implemented as a queue backend. Redis Lists, Streams, queues, workers, retries, transactions, pipelines, and Lua scripts are not Phase 2 features. Their selection and correctness requirements remain for later phases.
 
-## 5. Trade-offs & Operational Risks
+## 5. Alternatives Considered
 
-1. **In-Memory Volatility & Durability:**
-   - *Risk:* By default, Redis is an in-memory store. An abrupt server crash or power failure could result in lost jobs.
-   - *Mitigation to Validate:* Persistence requires explicit Redis configuration using Append-Only File (`AOF`) with `fsync everysec` (or `always`) alongside RDB snapshots.
-2. **Memory Constraints:**
-   - *Risk:* Unlike disk-backed databases (e.g. PostgreSQL), Redis dataset size is strictly bounded by physical RAM.
-   - *Mitigation:* Storing only `JobId` in queues and pruning/archiving completed and dead jobs periodically.
-3. **Single Point of Failure (SPOF):**
-   - *Risk:* A single standalone Redis instance represents a single point of failure for both queueing and persistence.
-   - *Mitigation:* In production, Redis Sentinel or Redis Cluster is required (deferred to Phase 10 / post-MVP).
-4. **Queue/Persistence Consistency:**
-   - *Risk:* Dual writes (saving a job in the repository and pushing its ID to a queue) can fail partially if network disconnects mid-flight.
-
----
-
-## 6. Validation Criteria Required Before Acceptance
-
-This ADR will transition from `Proposed` to `Accepted` in Phase 2 / Phase 3 upon satisfying the following validation criteria:
-- [ ] **Client Library Validation:** Benchmark Jedis connection pooling against thread concurrency in Phase 2.
-- [ ] **Serialization & Round-Trip Fidelity:** Verify that complex job payloads serialize to JSON and restore from Redis strings without data loss.
-- [ ] **Dual-Write Atomicity:** Evaluate and test whether Redis `MULTI`/`EXEC` transactions or Lua scripts reliably prevent orphaned jobs during enqueue.
-- [ ] **AOF Durability Check:** Confirm that simulated process restarts preserve stored jobs with Redis AOF enabled.
-- [ ] **Blocking Dequeue Concurrency:** Confirm that multiple concurrent workers executing `BRPOP` never receive duplicate `JobId`s.
-
----
-
-## 7. Alternatives Considered
-
-- **PostgreSQL + RabbitMQ:**
-  - *Pros:* Rock-solid relational ACID durability, mature AMQP queue semantics.
-  - *Cons:* Operational complexity of managing two distinct services; high operational overhead for a learning-oriented project.
-- **PostgreSQL SKIP LOCKED (Single RDBMS for both):**
-  - *Pros:* True relational ACID transactions; enqueue and job creation occur in a single database transaction.
-  - *Cons:* Database polling overhead; heavy write contention on queue tables under high throughput.
-- **Apache Kafka:**
-  - *Pros:* High throughput event streaming.
-  - *Cons:* Kafka is an event log, not a worker job queue (lacks fine-grained job acknowledgement, individual retries, and job-level claiming). Overkill for this project.
+- **PostgreSQL:** Strong relational durability, but adds a different persistence system to the learning scope.
+- **Redis Hashes:** Field-oriented storage, but Redis Strings containing serialized job documents better match the current repository boundary.
+- **Lettuce:** An asynchronous client alternative; Jedis 8.0.1 `RedisClient` is the implemented client for Phase 2.

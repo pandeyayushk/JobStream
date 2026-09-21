@@ -10,30 +10,34 @@ The project is being built incrementally, phase by phase, with thorough document
 
 ## Current Status
 
-**Phase 1 — Domain Model** (complete)
+**Phase 2 - Serialization & Persistence** (complete)
 
 - Maven project: `io.github.pandeyayushk:jobstream:1.0-SNAPSHOT`
-- Java 21 LTS, JUnit 5
+- Java 21 LTS, Maven, JUnit 5
 - Application entry point: `io.github.pandeyayushk.jobstream.Main`
 - Domain model: `JobId`, `JobStatus`, `Payload`, and `Job`
-- Phase 0 smoke test and Phase 1 domain tests passing
+- JSON serialization via Jackson Databind 3.2.2, without Jackson annotations on domain classes
+- Redis persistence via Jedis 8.0.1 `RedisClient`, with authoritative job records and secondary status indexes
+- Phase 0, Phase 1, and Phase 2 tests pass against a local Docker Redis instance
 
-No persistence, queue, worker, execution, retry, or operational features are implemented yet.
+Queue, worker, execution, retry, and operational features are not implemented yet.
 
 ## Technology Stack
 
-| Component       | Technology           |
-|-----------------|----------------------|
-| Language        | Java 21 LTS          |
-| Build System    | Apache Maven         |
-| Testing         | JUnit 5              |
-| Persistence     | Redis (planned)      |
-| Queue Backend   | Redis (planned)      |
+| Component | Technology |
+|---|---|
+| Language | Java 21 LTS |
+| Build System | Apache Maven |
+| Testing | JUnit 5 |
+| Serialization | Jackson Databind 3.2.2 |
+| Persistence | Redis via Jedis 8.0.1 |
+| Queue Backend | Redis (planned) |
 
 ## Requirements
 
 - JDK 21
 - Apache Maven 3.8+
+- Redis at `localhost:6379` for the Redis integration tests (for example, via Docker)
 
 ```powershell
 java -version
@@ -65,35 +69,35 @@ Expected output: `JobStream starting...`
 
 JobStream uses a structured documentation system to guide development:
 
-| Directory                | Purpose                                      |
-|--------------------------|----------------------------------------------|
-| `docs/requirements/`     | What the system must do                      |
-| `docs/architecture/`     | How the system is structured                 |
-| `docs/decisions/`        | Why architectural choices were made (ADRs)   |
-| `docs/versions/`         | Phase-by-phase implementation guides         |
+| Directory | Purpose |
+|---|---|
+| `docs/requirements/` | What the system must do |
+| `docs/architecture/` | How the system is structured |
+| `docs/decisions/` | Why architectural choices were made (ADRs) |
+| `docs/versions/` | Phase-by-phase implementation guides |
 
 ### Key Documents
 
-- [Project Structure](docs/architecture/project-structure.md) — Canonical package and repository layout
-- [System Overview](docs/architecture/system-overview.md) — High-level architecture
-- [Job Lifecycle](docs/architecture/job-lifecycle.md) — Job states and transitions
-- [ADR Index](docs/decisions/README.md) — Architecture decision records
+- [Project Structure](docs/architecture/project-structure.md) - Canonical package and repository layout
+- [System Overview](docs/architecture/system-overview.md) - High-level architecture
+- [Job Lifecycle](docs/architecture/job-lifecycle.md) - Job states and transitions
+- [ADR Index](docs/decisions/README.md) - Architecture decision records
 
 ## Development Roadmap
 
-| Phase | Name                        | Status    |
-|-------|-----------------------------|-----------|
-| 0     | Project Foundation          | ✅ Complete |
-| 1     | Domain Model                | ✅ Complete |
-| 2     | Serialization & Persistence | Planned   |
-| 3     | Queue System                | Planned   |
-| 4     | Worker Foundation           | Planned   |
-| 5     | Execution Engine            | Planned   |
-| 6     | Reliability & Retry         | Planned   |
-| 7     | CLI                         | Planned   |
-| 8     | Scheduling & Priority       | Planned   |
-| 9     | Observability & HTTP API    | Planned   |
-| 10    | Deployment & Hardening      | Planned   |
+| Phase | Name | Status |
+|---|---|---|
+| 0 | Project Foundation | Complete |
+| 1 | Domain Model | Complete |
+| 2 | Serialization & Persistence | Complete |
+| 3 | Queue System | Planned |
+| 4 | Worker Foundation | Planned |
+| 5 | Execution Engine | Planned |
+| 6 | Reliability & Retry | Planned |
+| 7 | CLI | Planned |
+| 8 | Scheduling & Priority | Planned |
+| 9 | Observability & HTTP API | Planned |
+| 10 | Deployment & Hardening | Planned |
 
 Each phase has a detailed guide in `docs/versions/`. See those guides for prerequisites, requirements, file manifests, and validation criteria.
 
@@ -102,17 +106,17 @@ Each phase has a detailed guide in `docs/versions/`. See those guides for prereq
 JobStream follows a **build-first** approach:
 
 ```
-READ → UNDERSTAND → DESIGN → IMPLEMENT → TEST → REVIEW → VALIDATE → MERGE
+READ -> UNDERSTAND -> DESIGN -> IMPLEMENT -> TEST -> REVIEW -> VALIDATE -> MERGE
 ```
 
-The documentation guides the developer through each phase. AI assistance is reserved for architecture review, debugging, concurrency problems, and design trade-offs — not for routine questions about what to build next.
+The documentation guides the developer through each phase. AI assistance is reserved for architecture review, debugging, concurrency problems, and design trade-offs - not for routine questions about what to build next.
 
 ## Git Workflow
 
 ```
 master (stable milestones)
   └── phase-N-name (implementation branch)
-       └── implement → test → review → validate → merge
+       └── implement -> test -> review -> validate -> merge
 ```
 
 ## License
