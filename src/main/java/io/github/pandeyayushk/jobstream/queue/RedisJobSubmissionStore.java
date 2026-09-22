@@ -28,6 +28,11 @@ public class RedisJobSubmissionStore implements JobSubmissionStore {
         Objects.requireNonNull(originalJob, "Original job cannot be null");
         Objects.requireNonNull(queuedJob, "Queued job cannot be null");
 
+        if (queueName == null || queueName.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Queue name cannot be null or blank"
+            );
+        }
 
         String jobKey = "jobstream:job:" + queuedJob.id();
         String oldStatusKey =
