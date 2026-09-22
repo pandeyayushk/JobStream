@@ -28,6 +28,6 @@ public class QueueCoordinatorImp implements QueueCoordinator {
 
         Job queuedJob = job.withStatus(JobStatus.QUEUED);
 
-        submissionStore.submit(queuedJob, queueName);
+        submissionStore.submit(job,queuedJob, queueName);
     }
 }
