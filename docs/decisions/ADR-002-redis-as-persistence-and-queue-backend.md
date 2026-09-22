@@ -1,6 +1,6 @@
 # ADR-002: Use Redis as the Persistence and Queue Backend
 
-- **Status:** Accepted for Phase 2 persistence; queue backend decision deferred
+- **Status:** Accepted; Phase 2 persistence and Phase 3 queue backend
 - **Date:** 2026-09-17
 - **Deciders:** Engineering Architecture
 
@@ -8,7 +8,7 @@
 
 ## 1. Context
 
-JobStream needs durable storage for complete job state indexed by `JobId`. Phase 2 implements that persistence responsibility with Redis. Queue dispatch, workers, retries, and other queue concerns are outside the implemented Phase 2 scope and must not be inferred from this decision.
+JobStream uses Redis for durable job storage and, as of Phase 3, FIFO queue dispatch. Workers, retries, and other later queue concerns remain outside this decision's implemented scope.
 
 ## 2. Decision
 
@@ -39,9 +39,9 @@ Redis/Jedis errors at the repository boundary are translated to `PersistenceExce
 - Redis persistence depends on the operational Redis configuration for durability across Redis restarts; Phase 2 does not validate AOF/RDB durability settings.
 - `save` is currently multiple Redis operations, not an atomic transaction. A crash may leave the status index inconsistent with the authoritative job record, and concurrent read-modify-write status changes are not yet hardened. These are deferred production-hardening concerns.
 
-## 4. Deferred Queue Decision
+## 4. Queue Backend (Phase 3)
 
-Redis is not yet implemented as a queue backend. Redis Lists, Streams, queues, workers, retries, transactions, pipelines, and Lua scripts are not Phase 2 features. Their selection and correctness requirements remain for later phases.
+`RedisJobQueue` stores only `JobId` strings in Redis Lists at `jobstream:queue:<queueName>`. It uses `LPUSH` to enqueue and `RPOP` or `BRPOP` to remove the oldest item, giving logical FIFO order even though the physical list order is newest-to-oldest. Atomic submission of the persisted queued job, status-index update, and list insertion is specified by ADR-005.
 
 ## 5. Alternatives Considered
 

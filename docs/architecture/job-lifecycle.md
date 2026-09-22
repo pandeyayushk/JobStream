@@ -49,7 +49,7 @@ A crucial architectural distinction exists between **defining the lifecycle cont
 | Transition | Triggering Subsystem | Implementing Phase | Description & Invariants |
 |---|---|---|---|
 | **`PENDING → QUEUED`** | **Producer / Queue System** | **Phase 3** | Occurs when a client submits a job. Job is saved to `JobRepository` and its `JobId` is atomically pushed to `JobQueue`. |
-| **`QUEUED → PROCESSING`** | **Worker Acquisition** | **Phase 3 / Phase 4** | Occurs when an active `Worker` pops a `JobId` from `JobQueue` and claims the job in `JobRepository`. |
+| **`QUEUED → PROCESSING`** | **Worker Acquisition** | **Phase 4** | After `JobQueue` returns a `JobId`, a worker loads the authoritative job from `JobRepository` and claims it. Dequeue itself does not change job status. |
 | **`PROCESSING → COMPLETED`** | **Execution Engine** | **Phase 5** | Occurs when `JobExecutor.execute(job)` returns `ExecutionResult.success()`. Completion timestamp is recorded. |
 | **`PROCESSING → FAILED`** | **Execution Engine** | **Phase 5** | Occurs when `JobExecutor.execute(job)` fails or throws a `Throwable`. Error details and timestamp are recorded. |
 | **`FAILED → RETRYING`** | **Reliability Subsystem** | **Phase 6** | Occurs when `RetryPolicy.shouldRetry(...)` evaluates to `true`. Retry attempt counter is incremented. |

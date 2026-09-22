@@ -2,7 +2,7 @@
 
 JobStream is a Redis-backed distributed job queue designed to provide reliable, decoupled, and scalable background job processing.
 
-> **Note:** This document outlines the TARGET architecture. Currently, the project is in Phase 0 and consists only of a bare Maven scaffold (`Main.java` and `MainTest.java`). The features described here are planned.
+> **Note:** Phase 3 is implemented: domain, serialization, persistence, and queue submission are available. Later worker, execution, reliability, and operational subsystems described here remain planned.
 
 ---
 
@@ -65,11 +65,10 @@ Producer ────────> [ JobQueue ] ────────> [ Work
 
 1. **Job Creation:** Producer instantiates a `Job` with unique `JobId`, `type`, and immutable `Payload` (status: `PENDING`).
 2. **Persistence & Enqueue:**
-   - Producer writes the `Job` to `JobRepository` with status `QUEUED`.
-   - Producer pushes `JobId` to the target `JobQueue`.
-   - *Atomicity boundary:* State update and queue insertion are coordinated to avoid stranded jobs or invalid references.
+   - `QueueCoordinator` creates the `QUEUED` version of the supplied job and delegates to `JobSubmissionStore`.
+   - `RedisJobSubmissionStore` atomically persists that job, moves its status-index entry, and pushes its `JobId` to the target queue with Redis `MULTI`/`EXEC`.
 3. **Worker Acquisition:**
-   - A `Worker` polling the queue performs a blocking pop (`BRPOP`) to acquire the next `JobId`.
+   - A future `Worker` polling the queue performs a blocking pop (`BRPOP`) to acquire the next `JobId`.
    - Worker fetches the full `Job` record from `JobRepository`.
    - Worker transitions job status to `PROCESSING` in `JobRepository`.
 4. **Execution:**
