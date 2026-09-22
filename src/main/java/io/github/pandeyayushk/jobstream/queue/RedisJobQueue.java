@@ -5,9 +5,7 @@ import redis.clients.jedis.RedisClient;
 import redis.clients.jedis.exceptions.JedisException;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 
 public class RedisJobQueue implements JobQueue{
     private static final String QUEUE_PREFIX = "jobstream:queue:";
@@ -94,7 +92,8 @@ public class RedisJobQueue implements JobQueue{
         }
         String key=QUEUE_PREFIX+queueName;
         try {
-            List<String> result=client.lrange(key,0,count-1);
+            List<String> result=client.lrange(key,-count,-1);
+            Collections.reverse(result);
             List<JobId> ids=new ArrayList<>();
             try {
                 for(String s:result){
