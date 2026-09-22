@@ -2,90 +2,60 @@
 
 ## 1. Purpose
 
-Defines the behavior, guarantees, and failure modes of the queue dispatch mechanism responsible for transferring work from producers to distributed workers.
+Defines the implemented Phase 3 queue contract: FIFO dispatch of `JobId` values and atomic submission of a queued job to Redis.
 
----
+## 2. Queue Contract
 
-## 2. Canonical Queue Content: Reference-Based (`JobId`)
+`JobQueue` operates only on `JobId` values:
 
-To avoid state synchronization bugs and duplicate payloads:
-- **The Queue contains only `JobId` references.**
-- The full `Job` entity resides exclusively in the `JobRepository`.
-- **Flow:**
-  1. Producer persists `Job` in `JobRepository`.
-  2. Producer enqueues `JobId` into `JobQueue`.
-  3. Worker dequeues `JobId` from `JobQueue`.
-  4. Worker retrieves `Job` from `JobRepository` and transitions status to `PROCESSING`.
+```java
+void enqueue(JobId jobId, String queueName);
+Optional<JobId> dequeue(String queueName, Duration timeout);
+Optional<JobId> dequeueNonBlocking(String queueName);
+long size(String queueName);
+List<JobId> peek(String queueName, int count);
+```
 
----
+`RedisJobQueue` stores IDs at `jobstream:queue:<queueName>`; it never stores a complete `Job`.
 
-## 3. Functional Requirements
+### FIFO and inspection
 
-### 3.1 FIFO Ordering & Queue Operations (`JobQueue`)
-- Default behavior is FIFO (First-In, First-Out) using Redis Lists:
-  - Enqueue: `LPUSH jobstream:queue:{name} {jobId}`
-  - Dequeue: `RPOP` (non-blocking) or `BRPOP` (blocking)
-- Operations required:
-  - `void enqueue(JobId jobId, String queueName)`
-  - `Optional<JobId> dequeue(String queueName, Duration timeout)`
-  - `Optional<JobId> dequeueNonBlocking(String queueName)`
-  - `long size(String queueName)`
-  - `List<JobId> peek(String queueName, int count)`
-- Support for multiple independent named queues (e.g. `default`, `notifications`, `reports`).
+- Enqueue uses `LPUSH`.
+- Non-blocking dequeue uses `RPOP`; blocking dequeue uses `BRPOP`.
+- Thus jobs enqueued as `Job1`, `Job2`, and `Job3` are dequeued as `Job1`, `Job2`, and `Job3`.
+- The physical Redis list is newest-to-oldest. `peek` reads and reverses the relevant tail range, returning logical FIFO order without removal.
+- Named queues are isolated. `size` uses the Redis list length.
 
-### 3.2 Worker Acquisition Semantics
-- At-most-one worker receives each `JobId` upon dequeue (enforced by Redis atomic `RPOP`/`BRPOP`).
-- Blocking dequeue must suspend the worker thread efficiently without busy-wait polling.
+### Blocking, validation, and failures
 
----
+- `dequeue` requires a non-null, positive `Duration`. Redis blocking time is expressed in whole seconds; the implementation rounds a fractional second up rather than claiming sub-second precision.
+- A timed-out blocking dequeue and an empty non-blocking dequeue return `Optional.empty()`.
+- Null or blank queue names, null IDs, and negative peek counts are rejected with `IllegalArgumentException`; `peek(..., 0)` returns an empty list.
+- Redis/Jedis failures, and an invalid ID returned from Redis, are reported as `QueueException`.
+- `RPOP` and `BRPOP` atomically remove one list element. Competing consumers therefore cannot receive the same removed ID during normal Redis operation.
 
-## 4. Queue / Persistence Atomicity Analysis
+## 3. Submission Boundary
 
-### 4.1 The Dual-Write Problem
-Enqueueing a job requires two logical operations:
-1. Update `Job` state in `JobRepository` (set status to `QUEUED`, record timestamp).
-2. Insert `JobId` into `JobQueue`.
+`QueueCoordinator` owns the application-level `submit(Job, String)` operation. `QueueCoordinatorImp` validates its inputs, creates `queuedJob` by transitioning the supplied job to `QUEUED`, and passes both the original and queued jobs to `JobSubmissionStore`. It neither invokes Redis directly nor depends on `RedisJobQueue`.
 
-### 4.2 Failure Scenarios & Invariant Violations
+`RedisJobSubmissionStore` is the Redis-specific implementation. In one `MULTI`/`EXEC` transaction it performs:
 
-- **Case A: State updated to `QUEUED`, but queue insertion fails.**
-  - *Trigger:* Network disconnect or Redis failure after step 1, before step 2.
-  - *Result:* **Stranded Job.** The job is marked `QUEUED` in the database, but will never be delivered to any worker because its `JobId` is not in the queue.
-- **Case B: `JobId` inserted into queue, but state update fails.**
-  - *Trigger:* Inserting into queue first, then repository write fails.
-  - *Result:* **Phantom / Out-of-Sync Job.** A worker dequeues the `JobId`, but finds the job in `PENDING` state (or non-existent in repository).
+1. `SET jobstream:job:<id> <queued-job-json>`
+2. `SREM jobstream:status:<original-status> <id>`
+3. `SADD jobstream:status:QUEUED <id>`
+4. `LPUSH jobstream:queue:<queueName> <id>`
 
-### 4.3 Target Invariant & Atomic Boundary
-- **Invariant:** A `JobId` must be visible in a `JobQueue` **if and only if** its corresponding record in `JobRepository` is persisted with status `QUEUED`.
-- **Required Atomic Boundary:** The persistence write and queue insertion must execute as a single atomic unit.
+The original job identifies the status index to remove; the queued job is the state persisted. This supports, for example, both `PENDING → QUEUED` and valid `DEAD → QUEUED` transitions. The job record remains authoritative in `JobRepository`; the queue remains a reference list.
 
-### 4.4 Redis Coordination Mechanisms to Investigate (Phase 3 Ownership)
-Because Redis serves as both the repository and the queue backend, the atomic boundary can be enforced using Redis native transactional primitives:
-1. **Redis Transactions (`MULTI` / `EXEC`):**
-   - Groups `SET jobstream:job:{id} ...` and `LPUSH jobstream:queue:{name} {id}` into a single transaction block.
-   - *Limitation:* Redis transactions do not support rollbacks based on intermediate query values, but guarantee all-or-nothing execution without interleaving.
-2. **Redis Lua Scripting (`EVAL` / `EVALSHA`):**
-   - A single Lua script executes atomically on the Redis server, performing state update and list push in one uninterrupted step.
-   - Ideal for conditional logic and atomic state validation.
+`MULTI`/`EXEC` executes the queued commands sequentially without interleaving from other clients. It is not a traditional rollback transaction: Redis does not undo commands that have already executed if a later command fails at execution time.
 
-*Phase 3 will benchmark and validate these mechanisms and record the final implementation choice in **ADR-005**.*
+## 4. Ownership and Boundaries
 
----
+- Phase 3 owns submission transitions to `QUEUED`, including `PENDING → QUEUED`.
+- Dequeue returns only a `JobId`; it does not perform `QUEUED → PROCESSING`.
+- Phase 4's Worker will load the authoritative job from `JobRepository` after dequeue and own `QUEUED → PROCESSING`.
+- `JobRepository` owns job persistence. `JobQueue` owns list operations. Neither depends on the other, and submission logic does not belong in `RedisJobQueue`.
 
-## 5. Non-Functional Requirements
+## 5. Verified Coverage
 
-- **Throughput:** O(1) time complexity for enqueue (`LPUSH`) and dequeue (`RPOP`/`BRPOP`).
-- **Safety:** No duplicate delivery during normal operations. At-least-once delivery guaranteed across restarts through acknowledgment/recovery mechanisms (refined in Phase 6).
-
----
-
-## 6. Dependencies
-
-- Persistence Layer (Phase 2: `JobRepository`)
-- Domain Model (Phase 1: `Job`, `JobId`, `JobStatus`)
-
----
-
-## 7. Phase Ownership
-
-- **Phase 3 (Queue System):** Designs `JobQueue`, implements `RedisJobQueue`, evaluates atomic enqueue mechanisms, and records ADR-005.
+The Phase 3 tests cover FIFO enqueue/dequeue and peek, timeout and empty behavior, size, named-queue isolation, input validation, Redis failure translation, ten concurrent consumers of fifty unique IDs, atomic submission, persisted status/index verification, `PENDING → QUEUED`, `DEAD → QUEUED`, submitted-ID queueing, and coordinator validation/transition behavior.

@@ -123,8 +123,10 @@ The core domain (`job`, `payload`) represents pure business concepts. It must re
 - **`io.github.pandeyayushk.jobstream.queue`**
   - **Responsibility:** Queue abstractions (`JobQueue`) and Redis implementations storing `Queue -> JobId` with atomic enqueue/dequeue semantics.
   - **Phase Introduced:** Phase 3
-  - **Planned Types:** `JobQueue`, `RedisJobQueue`
-  - **Allowed Dependencies:** `job`, `persistence`, `config`
+  - **Status:** Implemented in Phase 3
+  - **Implemented Types:** `JobQueue`, `RedisJobQueue`, `QueueCoordinator`, `QueueCoordinatorImp`, `JobSubmissionStore`, `RedisJobSubmissionStore`, `QueueException`
+  - **Allowed Dependencies:** `job`, `serialization`, Redis client
+  - **Boundary:** `JobQueue` has no dependency on `JobRepository`; `JobRepository` has no dependency on `JobQueue`. `QueueCoordinatorImp` owns application-level submission and delegates Redis-specific atomic work to `JobSubmissionStore`.
 
 - **`io.github.pandeyayushk.jobstream.worker`**
   - **Responsibility:** Worker process model, polling loop, lifecycle management, registration, and heartbeat.
@@ -188,10 +190,9 @@ The core domain (`job`, `payload`) represents pure business concepts. It must re
 2. **Mirroring in Tests:** Test packages in `src/test/java` must mirror production packages in `src/main/java` exactly.
 3. **No Premature Directory Creation:** Directories must not be created in `src/` until the phase introducing that package is actively implemented.
 
-## Current State (Phase 1)
+## Current State (Phase 3)
 
 Phase 1 is complete.
-- The root package contains `Main.java` and the Phase 0 smoke test.
-- The `job` package contains `Job`, `JobId`, and `JobStatus`, with Phase 1 unit tests.
-- The `payload` package contains `Payload`, with Phase 1 unit tests.
-- Infrastructure and operational packages remain future architecture.
+- The `job`, `payload`, `serialization`, `persistence`, and `queue` packages are implemented.
+- The `queue` package contains FIFO Redis list operations and the atomic submission adapter described above.
+- Worker and later operational packages remain future architecture.

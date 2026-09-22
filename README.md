@@ -10,7 +10,7 @@ The project is being built incrementally, phase by phase, with thorough document
 
 ## Current Status
 
-**Phase 2 - Serialization & Persistence** (complete)
+**Phase 3 - Queue System** (complete)
 
 - Maven project: `io.github.pandeyayushk:jobstream:1.0-SNAPSHOT`
 - Java 21 LTS, Maven, JUnit 5
@@ -18,9 +18,11 @@ The project is being built incrementally, phase by phase, with thorough document
 - Domain model: `JobId`, `JobStatus`, `Payload`, and `Job`
 - JSON serialization via Jackson Databind 3.2.2, without Jackson annotations on domain classes
 - Redis persistence via Jedis 8.0.1 `RedisClient`, with authoritative job records and secondary status indexes
-- Phase 0, Phase 1, and Phase 2 tests pass against a local Docker Redis instance
+- Redis queueing via `JobQueue` and `RedisJobQueue`, using `LPUSH` with `RPOP`/`BRPOP` for FIFO `JobId` dispatch
+- Atomic queue submission through `QueueCoordinator` and `RedisJobSubmissionStore`, using Redis `MULTI`/`EXEC`
+- Phase 0 through Phase 3 tests pass against a local Redis instance
 
-Queue, worker, execution, retry, and operational features are not implemented yet.
+Worker, execution, retry, and operational features are not implemented yet.
 
 ## Technology Stack
 
@@ -31,7 +33,7 @@ Queue, worker, execution, retry, and operational features are not implemented ye
 | Testing | JUnit 5 |
 | Serialization | Jackson Databind 3.2.2 |
 | Persistence | Redis via Jedis 8.0.1 |
-| Queue Backend | Redis (planned) |
+| Queue Backend | Redis Lists via Jedis 8.0.1 |
 
 ## Requirements
 
@@ -90,7 +92,7 @@ JobStream uses a structured documentation system to guide development:
 | 0 | Project Foundation | Complete |
 | 1 | Domain Model | Complete |
 | 2 | Serialization & Persistence | Complete |
-| 3 | Queue System | Planned |
+| 3 | Queue System | Complete |
 | 4 | Worker Foundation | Planned |
 | 5 | Execution Engine | Planned |
 | 6 | Reliability & Retry | Planned |
