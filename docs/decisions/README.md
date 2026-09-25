@@ -29,6 +29,7 @@ Each ADR should follow this structure:
 - [ADR-003: Job Entity Representation and Immutability](ADR-003-job-entity-representation-and-immutability.md)
 - [ADR-004: Domain Payload Contract](ADR-004-domain-payload-contract.md)
 - [ADR-005: Atomic Redis Job Submission with MULTI/EXEC](ADR-005-atomic-redis-job-submission-with-multi-exec.md)
+- [ADR-006: Worker Lifecycle, Graceful Shutdown, and Heartbeat](ADR-006-worker-lifecycle-graceful-shutdown-and-heartbeat.md)
 
 ## Rule of Thumb
 Trivial decisions don't need ADRs. ADRs are for decisions that affect system architecture, are hard to reverse, or have significant trade-offs.

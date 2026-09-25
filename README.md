@@ -10,7 +10,7 @@ The project is being built incrementally, phase by phase, with thorough document
 
 ## Current Status
 
-**Phase 3 - Queue System** (complete)
+**Phase 4 - Worker Foundation** (implemented)
 
 - Maven project: `io.github.pandeyayushk:jobstream:1.0-SNAPSHOT`
 - Java 21 LTS, Maven, JUnit 5
@@ -20,9 +20,11 @@ The project is being built incrementally, phase by phase, with thorough document
 - Redis persistence via Jedis 8.0.1 `RedisClient`, with authoritative job records and secondary status indexes
 - Redis queueing via `JobQueue` and `RedisJobQueue`, using `LPUSH` with `RPOP`/`BRPOP` for FIFO `JobId` dispatch
 - Atomic queue submission through `QueueCoordinator` and `RedisJobSubmissionStore`, using Redis `MULTI`/`EXEC`
-- Phase 0 through Phase 3 tests pass against a local Redis instance
+- Worker lifecycle, registry, TTL heartbeat, graceful shutdown, and bounded concurrent processing
+- Phase 4 execution boundary through `WorkerJobHandler`; production `JobExecutor` dispatch belongs to Phase 5
+- Retry behavior belongs to Phase 6
 
-Worker, execution, retry, and operational features are not implemented yet.
+Production executor dispatch, retry, and later operational features are not implemented yet.
 
 ## Technology Stack
 
@@ -93,7 +95,7 @@ JobStream uses a structured documentation system to guide development:
 | 1 | Domain Model | Complete |
 | 2 | Serialization & Persistence | Complete |
 | 3 | Queue System | Complete |
-| 4 | Worker Foundation | Planned |
+| 4 | Worker Foundation | Complete |
 | 5 | Execution Engine | Planned |
 | 6 | Reliability & Retry | Planned |
 | 7 | CLI | Planned |

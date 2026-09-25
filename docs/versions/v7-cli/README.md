@@ -99,7 +99,7 @@ Up to Phase 6, interactions with JobStream require programmatic code or unit/int
    - `peek`: Shows head jobs in queue without consuming them.
 
 4. **Worker Commands (`WorkerCommand`):**
-   - `list`: Queries `WorkerRegistry` and displays active workers, assigned queues, status, and last heartbeat age.
+   - `list`: Queries `WorkerRegistry` and displays active workers using the available `WorkerInfo` fields (worker ID, status, and start time). Liveness is determined by `listActiveWorkers()` from heartbeat-key presence; assigned queues and heartbeat age are not fields in `WorkerInfo`.
 
 5. **DLQ Commands (`DlqCommand`):**
    - `list`: Lists jobs currently in `jobstream:queue:dead-letter`.

@@ -78,9 +78,9 @@ The core domain (`job`, `payload`) represents pure business concepts. It must re
             [job]
    ```
    `application / coordinator` in this diagram is a conceptual coordination layer, not a current Java package. Coordination responsibilities remain in the packages that introduce them; this diagram does not require or introduce an `application` package.
-3. **Worker → Executor Relationship:**
-   - `worker` depends on the `executor` abstraction (`JobExecutor`, `ExecutorRegistry`).
-   - `executor` **MUST NOT** depend on `worker`. An executor only knows about `Job` and `Payload`.
+3. **Worker Execution Boundary:**
+   - Phase 4 `worker` depends on `queue`, `persistence`, and `WorkerJobHandler`; production executor dispatch is introduced in Phase 5.
+   - Phase 5 executors should remain independent of worker machinery.
 4. **Configuration Dependency:**
    - `config` provides operational configuration parameters.
    - Runtime/infrastructure packages (`persistence`, `worker`, `cli`, `api`) may depend on `config`.
@@ -131,8 +131,9 @@ The core domain (`job`, `payload`) represents pure business concepts. It must re
 - **`io.github.pandeyayushk.jobstream.worker`**
   - **Responsibility:** Worker process model, polling loop, lifecycle management, registration, and heartbeat.
   - **Phase Introduced:** Phase 4
-  - **Planned Types:** `Worker`, `WorkerId`, `WorkerInfo`, `WorkerStatus`, `WorkerRegistry`, `RedisWorkerRegistry`
-  - **Allowed Dependencies:** `job`, `queue`, `persistence`, `executor`, `config`
+  - **Status:** Implemented in Phase 4
+  - **Implemented Types:** `Worker`, `WorkerId`, `WorkerInfo`, `WorkerStatus`, `WorkerConfig`, `WorkerRegistry`, `RedisWorkerRegistry`, `WorkerJobHandler`, `WorkerException`
+  - **Allowed Dependencies:** `job`, `queue`, `persistence`
 
 - **`io.github.pandeyayushk.jobstream.executor`**
   - **Responsibility:** Pluggable execution abstraction (`JobExecutor`), execution result model, and executor registry/factory.
@@ -190,9 +191,9 @@ The core domain (`job`, `payload`) represents pure business concepts. It must re
 2. **Mirroring in Tests:** Test packages in `src/test/java` must mirror production packages in `src/main/java` exactly.
 3. **No Premature Directory Creation:** Directories must not be created in `src/` until the phase introducing that package is actively implemented.
 
-## Current State (Phase 3)
+## Current State (Phase 4)
 
 Phase 1 is complete.
 - The `job`, `payload`, `serialization`, `persistence`, and `queue` packages are implemented.
 - The `queue` package contains FIFO Redis list operations and the atomic submission adapter described above.
-- Worker and later operational packages remain future architecture.
+- Worker foundation is implemented. Production executor dispatch and retry remain future phases.
