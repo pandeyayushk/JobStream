@@ -15,6 +15,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.RejectedExecutionException;
 
 public class Worker {
 
@@ -251,11 +252,25 @@ public class Worker {
                     break;
                 }
 
-                processingExecutor.submit(
-                        () -> processJob(jobId.get())
-                );
+                try {
+                    processingExecutor.submit(
+                            () -> processJob(jobId.get())
+                    );
 
-                permitAcquired = false;
+                    permitAcquired = false;
+
+                } catch (RejectedExecutionException e) {
+                    queue.enqueue(
+                            jobId.get(),
+                            config.queueName()
+                    );
+
+                    processingPermits.release();
+
+                    if (status != WorkerStatus.RUNNING) {
+                        break;
+                    }
+                }
 
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
