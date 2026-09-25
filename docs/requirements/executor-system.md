@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-Defines how domain-specific job execution logic is decoupled from worker machinery, organized, and invoked, enabling new job types to be added without modifying worker or queue infrastructure.
+Defines the planned Phase 5 production execution system. This is a target requirement, not a description of the current Phase 4 worker, which invokes `WorkerJobHandler`.
 
 ---
 
@@ -77,4 +77,4 @@ The dependency between worker and executor is strictly one-way:
 
 ## 7. Phase Ownership
 
-- **Phase 5 (Execution Engine):** Implements `JobExecutor`, `ExecutionResult`, `ExecutorRegistry`, and integrates them into the worker loop.
+- **Phase 5 (Execution Engine):** Implements `JobExecutor`, `ExecutionResult`, `ExecutorRegistry`, and integrates production job-type dispatch at the worker execution boundary.

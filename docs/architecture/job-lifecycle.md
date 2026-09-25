@@ -50,8 +50,8 @@ A crucial architectural distinction exists between **defining the lifecycle cont
 |---|---|---|---|
 | **`PENDING → QUEUED`** | **Producer / Queue System** | **Phase 3** | Occurs when a client submits a job. Job is saved to `JobRepository` and its `JobId` is atomically pushed to `JobQueue`. |
 | **`QUEUED → PROCESSING`** | **Worker Acquisition** | **Phase 4** | After `JobQueue` returns a `JobId`, a worker loads the authoritative job from `JobRepository` and claims it. Dequeue itself does not change job status. |
-| **`PROCESSING → COMPLETED`** | **Execution Engine** | **Phase 5** | Occurs when `JobExecutor.execute(job)` returns `ExecutionResult.success()`. Completion timestamp is recorded. |
-| **`PROCESSING → FAILED`** | **Execution Engine** | **Phase 5** | Occurs when `JobExecutor.execute(job)` fails or throws a `Throwable`. Error details and timestamp are recorded. |
+| **`PROCESSING → COMPLETED`** | **Worker / `WorkerJobHandler`** | **Phase 4** | Occurs when `WorkerJobHandler.handle(job)` returns normally; the worker persists the completed job. Production `JobExecutor` execution is Phase 5. |
+| **`PROCESSING → FAILED`** | **Worker / `WorkerJobHandler`** | **Phase 4** | Occurs when the handler throws an `Exception`; the worker persists the failed job and continues. Retry is not part of Phase 4. |
 | **`FAILED → RETRYING`** | **Reliability Subsystem** | **Phase 6** | Occurs when `RetryPolicy.shouldRetry(...)` evaluates to `true`. Retry attempt counter is incremented. |
 | **`RETRYING → QUEUED`** | **Reliability / Scheduler** | **Phase 6 (immediate/timer) / Phase 8 (ZSET)** | Occurs after backoff delay elapses. `JobId` is placed back onto the active queue for worker acquisition. |
 | **`FAILED → DEAD`** | **Reliability Subsystem** | **Phase 6** | Occurs when retry attempts reach `maxRetries`. Job is moved to the Dead-Letter Queue (`jobstream:queue:dead-letter`). |

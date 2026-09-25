@@ -2,7 +2,7 @@
 
 JobStream is a Redis-backed distributed job queue designed to provide reliable, decoupled, and scalable background job processing.
 
-> **Note:** Phase 3 is implemented: domain, serialization, persistence, and queue submission are available. Later worker, execution, reliability, and operational subsystems described here remain planned.
+> **Note:** Phases 1 through 4 are implemented. Phase 4 provides the worker foundation and `WorkerJobHandler` boundary. Production executor dispatch belongs to Phase 5; retry belongs to Phase 6. Later operational subsystems remain planned.
 
 ---
 
@@ -21,11 +21,10 @@ The JobStream system consists of the following decoupled subsystems:
    - Decoupled from full job storage; enqueuing places `JobId` onto the queue, and dequeuing retrieves `JobId`.
    - Priority queues and time-delayed scheduling.
 4. **Worker System (`worker`)**
-   - Manages worker registration, heartbeat-based liveness detection, graceful shutdown, and concurrent processing loops.
-   - Dequeues `JobId` from queues, fetches full `Job` state from `JobRepository`, and coordinates execution.
+   - Manages worker registration, heartbeat-based liveness detection, graceful shutdown, and bounded concurrent processing.
+   - Dequeues `JobId`, fetches the job from `JobRepository`, claims `QUEUED` jobs, and delegates to `WorkerJobHandler` in Phase 4.
 5. **Execution Engine (`executor`)**
-   - Pluggable `JobExecutor` abstraction and `ExecutorRegistry` dispatching execution based on job type.
-   - Decoupled from worker machinery: executors know only about `Job` and `Payload`; workers invoke executors through the abstraction.
+   - Planned for Phase 5: production `JobExecutor` abstraction, implementations, and type-based dispatch/factory.
 6. **Reliability Layer (`retry`)**
    - Handles transient failures with configurable retry policies, non-blocking backoff scheduling, and Dead-Letter Queue (DLQ) quarantine for exhausted failures.
 7. **Management & Observability (`cli`, `api`, `metrics`)**
@@ -53,7 +52,7 @@ To prevent data duplication and maintain a single source of truth:
                          │                │
            1. Save Job   │                │ 5. Update Status
                          ▼                │    (PROCESSING / COMPLETED / FAILED)
-Producer ────────> [ JobQueue ] ────────> [ Worker ] ────────> [ JobExecutor ]
+Producer ────────> [ JobQueue ] ────────> [ Worker ] ────────> [ WorkerJobHandler ]
    │               (Redis List)              │                        │
    │               Queue → JobId             │ 4. Execute             │
    │                     │                   └────────────────────────┘
@@ -68,17 +67,11 @@ Producer ────────> [ JobQueue ] ────────> [ Work
    - `QueueCoordinator` creates the `QUEUED` version of the supplied job and delegates to `JobSubmissionStore`.
    - `RedisJobSubmissionStore` atomically persists that job, moves its status-index entry, and pushes its `JobId` to the target queue with Redis `MULTI`/`EXEC`.
 3. **Worker Acquisition:**
-   - A future `Worker` polling the queue performs a blocking pop (`BRPOP`) to acquire the next `JobId`.
+   - `Worker` polls the configured queue to acquire the next `JobId` (the Redis queue uses a timed blocking dequeue).
    - Worker fetches the full `Job` record from `JobRepository`.
    - Worker transitions job status to `PROCESSING` in `JobRepository`.
-4. **Execution:**
-   - Worker retrieves the appropriate `JobExecutor` from `ExecutorRegistry` matching `job.getType()`.
-   - Worker invokes `JobExecutor.execute(job)` inside a defensive boundary intercepting `Throwable`.
-5. **Outcome Resolution:**
-   - **Success:** Worker updates job status to `COMPLETED` and saves completion timestamp in `JobRepository`.
-   - **Failure:** Worker records error details. The `RetryPolicy` is evaluated:
-     - If retries remain: Job status becomes `RETRYING`, retry counter increments, and job is scheduled for future re-enqueueing.
-     - If retries exhausted: Job status becomes `DEAD`, and `JobId` is moved to the Dead-Letter Queue (DLQ).
+4. **Phase 4 Execution Boundary:** Worker invokes `WorkerJobHandler` with the persisted `PROCESSING` job. A normal return persists `COMPLETED`; a handler `Exception` persists `FAILED`. Handler failure does not terminate the worker. Retry is not part of Phase 4.
+5. **Later phases:** Phase 5 introduces production executor selection and job-type execution. Phase 6 introduces retry policy, scheduling, and retry exhaustion handling.
 
 ---
 
@@ -87,9 +80,8 @@ Producer ────────> [ JobQueue ] ────────> [ Work
 1. **Dependency Direction Inward:**
    - The core domain (`job`, `payload`) has zero dependencies on infrastructure, configuration, or execution frameworks.
    - High-level orchestrators depend on abstractions; infrastructure implements abstractions.
-2. **Worker / Executor Decoupling:**
-   - `Worker` depends on `JobExecutor` abstraction.
-   - `JobExecutor` has **zero knowledge** of `Worker`. Executors process jobs and return results.
+2. **Worker Execution Boundary:**
+   - Phase 4 delegates through `WorkerJobHandler`; production `JobExecutor` dispatch is Phase 5.
 3. **Single Source of Truth:**
    - The `JobRepository` is the sole authoritative store of job state. The queue contains only references (`JobId`).
 4. **Fault Containment:**
