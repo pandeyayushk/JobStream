@@ -209,4 +209,18 @@ class WorkerConfigTest {
         assertEquals(Duration.ofSeconds(10), config.heartbeatInterval());
         assertEquals(Duration.ofSeconds(30), config.heartbeatTtl());
     }
+
+    @Test
+    void rejectsHeartbeatTtlBelowOneSecond() {
+        assertThrowsExactly(
+                IllegalArgumentException.class,
+                () -> new WorkerConfig(
+                        "default",
+                        4,
+                        Duration.ofMillis(100),
+                        Duration.ofMillis(999),
+                        Duration.ofSeconds(30)
+                )
+        );
+    }
 }

@@ -13,6 +13,9 @@ public record WorkerConfig(String queueName, int concurrency, Duration heartbeat
         if(heartbeatInterval.isZero()||heartbeatInterval.isNegative())throw new IllegalArgumentException("Heartbeat Interval must be greater than zero");
         Objects.requireNonNull(heartbeatTtl,"Heartbeat Ttl cannot be null");
         if(heartbeatTtl.isZero()||heartbeatTtl.isNegative())throw new IllegalArgumentException("Heartbeat Ttl must be greater than zero");
+        if (heartbeatTtl.compareTo(Duration.ofSeconds(1)) < 0) {
+            throw new IllegalArgumentException("Heartbeat TTL must be at least one second");
+        }
         Objects.requireNonNull(shutdownTimeout,"Shutdown Timeout cannot be null");
         if(shutdownTimeout.isZero()||shutdownTimeout.isNegative())throw new IllegalArgumentException("Shutdown Timeout must be greater than zero");
         if(heartbeatInterval.compareTo(heartbeatTtl)>=0)throw new IllegalArgumentException("Heartbeat Interval must be less than HeartBeatTtl");
