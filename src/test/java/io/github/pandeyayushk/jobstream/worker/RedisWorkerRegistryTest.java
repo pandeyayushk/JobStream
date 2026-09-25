@@ -508,4 +508,31 @@ class RedisWorkerRegistryTest {
                 unavailableRegistry::listActiveWorkers
         );
     }
+
+    @Test
+    void heartbeatFailsWhenWorkerIsDeregisteredBeforeTransactionExec() {
+        WorkerId workerId = WorkerId.generate();
+
+        WorkerInfo info = new WorkerInfo(
+                workerId,
+                WorkerStatus.RUNNING,
+                Instant.now()
+        );
+
+        registry.register(info);
+
+        registry.deregister(workerId);
+
+        assertThrows(
+                WorkerException.class,
+                () -> registry.heartbeat(workerId)
+        );
+
+        String heartbeatKey =
+                "jobstream:worker:" + workerId + ":heartbeat";
+
+        assertFalse(
+                client.exists(heartbeatKey)
+        );
+    }
 }

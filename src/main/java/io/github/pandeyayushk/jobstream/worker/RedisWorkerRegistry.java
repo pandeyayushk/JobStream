@@ -43,20 +43,62 @@ public class RedisWorkerRegistry implements WorkerRegistry{
 
     @Override
     public void heartbeat(WorkerId workerId) {
-        Objects.requireNonNull(workerId,"WorkerId can not be null");
-        String workerKey = "jobstream:worker:" + workerId;
-        try{
-            Map<String,String> metadata=client.hgetAll(workerKey);
-            if(metadata.isEmpty())throw new WorkerException("Worker does not exists");
-            String heartbeatKey = workerKey + ":heartbeat";
-            var transaction = client.multi();
-            transaction.set(heartbeatKey, "alive");
-            transaction.expire(heartbeatKey, heartbeatTtl.getSeconds());
-            transaction.exec();
-        }catch (JedisException e){
-            throw new WorkerException("Failed to update worker heartbeat",e);
-        }
+        Objects.requireNonNull(
+                workerId,
+                "WorkerId cannot be null"
+        );
 
+        String workerKey =
+                "jobstream:worker:" + workerId;
+
+        String heartbeatKey =
+                workerKey + ":heartbeat";
+
+        try (var transaction = client.transaction(false)) {
+
+            /*
+             * Watch the worker metadata.
+             *
+             * If deregistration changes/deletes this key before EXEC,
+             * the heartbeat transaction will be aborted.
+             */
+            transaction.watch(workerKey);
+
+            Map<String, String> metadata =
+                    client.hgetAll(workerKey);
+
+            if (metadata.isEmpty()) {
+                throw new WorkerException(
+                        "Worker does not exist"
+                );
+            }
+
+            transaction.multi();
+
+            transaction.set(
+                    heartbeatKey,
+                    "alive"
+            );
+
+            transaction.expire(
+                    heartbeatKey,
+                    heartbeatTtl.getSeconds()
+            );
+
+            var results = transaction.exec();
+
+            if (results == null) {
+                throw new WorkerException(
+                        "Worker registration changed during heartbeat"
+                );
+            }
+
+        } catch (JedisException e) {
+            throw new WorkerException(
+                    "Failed to update worker heartbeat",
+                    e
+            );
+        }
     }
 
     @Override
