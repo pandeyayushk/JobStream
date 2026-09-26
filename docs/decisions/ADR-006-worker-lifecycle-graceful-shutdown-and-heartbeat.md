@@ -36,6 +36,7 @@ The architecture explicitly separates queue references from persisted job record
 
 ## Consequences
 
+- Historical note: Phase 5 replaced `WorkerJobHandler` as the active execution boundary with `ExecutorRegistry` and `JobExecutor`; the Phase 4 behavior above records the design at the time of this ADR.
 - Queue and persistence responsibilities remain independent; job loading and state transitions belong to the worker.
 - Handler failures and orphaned IDs are contained so the worker continues, while Phase 4 does not retry.
 - A dequeued but not yet submitted ID is returned to the queue during the shutdown race.

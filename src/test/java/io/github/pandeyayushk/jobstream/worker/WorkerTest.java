@@ -1,5 +1,7 @@
 package io.github.pandeyayushk.jobstream.worker;
 
+import io.github.pandeyayushk.jobstream.executor.DefaultExecutorRegistry;
+import io.github.pandeyayushk.jobstream.executor.ExecutionResult;
 import io.github.pandeyayushk.jobstream.job.Job;
 import io.github.pandeyayushk.jobstream.job.JobId;
 import io.github.pandeyayushk.jobstream.job.JobStatus;
@@ -15,6 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Consumer;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
@@ -629,15 +632,26 @@ class WorkerTest {
             JobQueue queue,
             JobRepository repository,
             WorkerRegistry registry,
-            WorkerJobHandler handler,
+            Consumer<Job> handler,
             WorkerConfig config
     ) {
+        DefaultExecutorRegistry executorRegistry =
+                new DefaultExecutorRegistry();
+
+        executorRegistry.register(
+                "test-job",
+                job -> {
+                    handler.accept(job);
+                    return ExecutionResult.success();
+                }
+        );
+
         Worker worker = new Worker(
                 WorkerId.generate(),
                 queue,
                 repository,
                 registry,
-                handler,
+                executorRegistry,
                 config
         );
 

@@ -1,5 +1,8 @@
 package io.github.pandeyayushk.jobstream.worker;
 
+import io.github.pandeyayushk.jobstream.executor.ExecutionResult;
+import io.github.pandeyayushk.jobstream.executor.ExecutorRegistry;
+import io.github.pandeyayushk.jobstream.executor.JobExecutor;
 import io.github.pandeyayushk.jobstream.job.Job;
 import io.github.pandeyayushk.jobstream.job.JobId;
 import io.github.pandeyayushk.jobstream.job.JobStatus;
@@ -12,10 +15,10 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.RejectedExecutionException;
 
 public class Worker {
 
@@ -26,7 +29,7 @@ public class Worker {
     private final JobQueue queue;
     private final JobRepository jobRepository;
     private final WorkerRegistry workerRegistry;
-    private final WorkerJobHandler jobHandler;
+    private final ExecutorRegistry executorRegistry;
     private final WorkerConfig config;
 
     private volatile WorkerStatus status;
@@ -43,7 +46,7 @@ public class Worker {
             JobQueue queue,
             JobRepository jobRepository,
             WorkerRegistry workerRegistry,
-            WorkerJobHandler jobHandler,
+            ExecutorRegistry executorRegistry,
             WorkerConfig config
     ) {
         this.workerId = Objects.requireNonNull(
@@ -62,9 +65,9 @@ public class Worker {
                 workerRegistry,
                 "WorkerRegistry cannot be null"
         );
-        this.jobHandler = Objects.requireNonNull(
-                jobHandler,
-                "WorkerJobHandler cannot be null"
+        this.executorRegistry = Objects.requireNonNull(
+                executorRegistry,
+                "ExecutorRegistry cannot be null"
         );
         this.config = Objects.requireNonNull(
                 config,
@@ -260,6 +263,11 @@ public class Worker {
                     permitAcquired = false;
 
                 } catch (RejectedExecutionException e) {
+                    /*
+                     * The job was removed from the queue but the
+                     * processing executor rejected it. Return the job
+                     * to the queue so it is not lost during shutdown.
+                     */
                     queue.enqueue(
                             jobId.get(),
                             config.queueName()
@@ -300,7 +308,11 @@ public class Worker {
                     jobRepository.findById(jobId);
 
             /*
-             * Orphaned JobId. The worker must survive this.
+             * Orphaned JobId.
+             *
+             * The queue contained a JobId that does not exist
+             * in the authoritative repository. Do not allow this
+             * to terminate the worker.
              */
             if (optionalJob.isEmpty()) {
                 return;
@@ -321,34 +333,84 @@ public class Worker {
 
             jobRepository.save(processingJob);
 
-            try {
-                jobHandler.handle(processingJob);
+            JobExecutor executor =
+                    executorRegistry.get(processingJob.type())
+                            .orElse(null);
 
+            if (executor == null) {
+                markFailed(
+                        processingJob,
+                        "No executor registered for job type: "
+                                + processingJob.type()
+                );
+                return;
+            }
+
+            ExecutionResult result;
+
+            try {
+                result = executor.execute(processingJob);
+
+            } catch (Throwable t) {
+                markFailed(
+                        processingJob,
+                        executionFailureMessage(t)
+                );
+                return;
+            }
+
+            if (result == null) {
+                markFailed(
+                        processingJob,
+                        "Executor returned null ExecutionResult"
+                );
+                return;
+            }
+
+            if (result.isSuccess()) {
                 Job completedJob =
                         processingJob.withStatus(
                                 JobStatus.COMPLETED
                         );
 
                 jobRepository.save(completedJob);
-
-            } catch (Exception e) {
-
-                Job failedJob =
-                        processingJob.withStatus(
-                                JobStatus.FAILED
-                        );
-
-                jobRepository.save(failedJob);
+                return;
             }
+
+            markFailed(
+                    processingJob,
+                    result.getErrorMessage()
+                            .orElse("Job execution failed")
+            );
 
         } catch (RuntimeException e) {
             /*
-             * A malformed/orphaned job must not terminate
-             * the worker processing thread.
+             * A malformed/orphaned job or repository/runtime failure
+             * must not terminate the worker processing thread.
              */
         } finally {
             processingPermits.release();
         }
+    }
+
+    private void markFailed(Job job, String reason) {
+        Job failedJob = job
+                .withStatus(JobStatus.FAILED)
+                .withMetadata("failure.reason", reason);
+
+        jobRepository.save(failedJob);
+    }
+
+    private String executionFailureMessage(
+            Throwable throwable
+    ) {
+        String message = throwable.getMessage();
+
+        if (message == null || message.isBlank()) {
+            return throwable.getClass().getName();
+        }
+
+        return message;
     }
 
     private void sendHeartbeat() {

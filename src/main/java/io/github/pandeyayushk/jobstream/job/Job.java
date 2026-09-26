@@ -51,6 +51,38 @@ public final class Job {
          return new Job(id,type,newStatus,payload,createdAt,updatedAt,metadata);
     }
 
+    public Job withMetadata(String key, String value) {
+        if (key == null) {
+            throw new NullPointerException("Metadata key cannot be null");
+        }
+
+        if (key.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Metadata key cannot be blank"
+            );
+        }
+
+        if (value == null) {
+            throw new NullPointerException(
+                    "Metadata value cannot be null"
+            );
+        }
+
+        Map<String, String> newMetadata =
+                new java.util.HashMap<>(metadata);
+
+        newMetadata.put(key, value);
+
+        return new Job(
+                id,
+                type,
+                status,
+                payload,
+                createdAt,
+                Instant.now(),
+                newMetadata
+        );
+    }
 
     public JobId id() {
         return id;
