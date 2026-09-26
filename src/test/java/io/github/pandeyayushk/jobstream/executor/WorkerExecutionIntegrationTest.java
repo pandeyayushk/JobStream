@@ -353,16 +353,10 @@ class WorkerExecutionIntegrationTest {
                 "default"
         );
 
-        AtomicInteger executions =
-                new AtomicInteger();
-
         executorRegistry.register(
                 "test-job",
                 job -> {
-                    int execution =
-                            executions.incrementAndGet();
-
-                    if (execution == 1) {
+                    if (job.id().equals(firstJob.id())) {
                         return ExecutionResult.failure(
                                 "first execution failed"
                         );
@@ -477,6 +471,47 @@ class WorkerExecutionIntegrationTest {
                         + (actual == null
                         ? "MISSING"
                         : actual.status())
+        );
+    }
+
+    @Test
+    void executorFailurePersistsFailureReason()
+            throws Exception {
+
+        Job job =
+                queuedJob("test-job");
+
+        repository.save(job);
+
+        queue.enqueue(
+                job.id(),
+                "default"
+        );
+
+        executorRegistry.register(
+                "test-job",
+                new FailingExecutor(
+                        "intentional executor failure"
+                )
+        );
+
+        worker = createWorker();
+
+        worker.start();
+
+        waitForStatus(
+                job.id(),
+                JobStatus.FAILED
+        );
+
+        Job failedJob =
+                repository.findById(job.id())
+                        .orElseThrow();
+
+        assertEquals(
+                "intentional executor failure",
+                failedJob.metadata()
+                        .get("failure.reason")
         );
     }
 }
