@@ -133,4 +133,110 @@ public class JobTest {
                 () -> job.metadata().put("priority", "high")
         );
     }
+
+    @Test
+    public void withMetadataReturnsNewJob() {
+        Job original = Job.create(
+                "email:send",
+                Payload.empty()
+        );
+
+        Instant originalUpdatedAt = original.updatedAt();
+
+        Job newJob = original.withMetadata(
+                "failure.reason",
+                "Invalid email"
+        );
+
+        assertEquals(
+                "Invalid email",
+                newJob.metadata().get("failure.reason")
+        );
+
+        assertTrue(
+                newJob.updatedAt().compareTo(originalUpdatedAt) >= 0
+        );
+
+        assertTrue(original.metadata().isEmpty());
+
+        assertNotSame(original, newJob);
+        assertEquals(original.id(), newJob.id());
+        assertEquals(original.type(), newJob.type());
+        assertEquals(original.status(), newJob.status());
+        assertEquals(original.payload(), newJob.payload());
+        assertEquals(original.createdAt(), newJob.createdAt());
+    }
+
+    @Test
+    public void withMetadataReplacesExistingValue() {
+        Job original = Job.reconstitute(
+                JobId.generate(),
+                "email:send",
+                JobStatus.FAILED,
+                Payload.empty(),
+                Instant.now(),
+                Instant.now(),
+                Map.of(
+                        "failure.reason",
+                        "old reason"
+                )
+        );
+
+        Job updated = original.withMetadata(
+                "failure.reason",
+                "new reason"
+        );
+
+        assertEquals(
+                "new reason",
+                updated.metadata().get("failure.reason")
+        );
+
+        assertEquals(
+                "old reason",
+                original.metadata().get("failure.reason")
+        );
+    }
+
+    @Test
+    public void withMetadataRejectsNullKey() {
+        Job job = Job.create(
+                "email:send",
+                Payload.empty()
+        );
+
+        assertThrowsExactly(
+                NullPointerException.class,
+                () -> job.withMetadata(null, "reason")
+        );
+    }
+
+    @Test
+    public void withMetadataRejectsBlankKey() {
+        Job job = Job.create(
+                "email:send",
+                Payload.empty()
+        );
+
+        assertThrowsExactly(
+                IllegalArgumentException.class,
+                () -> job.withMetadata("   ", "reason")
+        );
+    }
+
+    @Test
+    public void withMetadataRejectsNullValue() {
+        Job job = Job.create(
+                "email:send",
+                Payload.empty()
+        );
+
+        assertThrowsExactly(
+                NullPointerException.class,
+                () -> job.withMetadata(
+                        "failure.reason",
+                        null
+                )
+        );
+    }
 }
