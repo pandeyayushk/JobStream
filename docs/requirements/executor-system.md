@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-Defines the planned Phase 5 production execution system. This is a target requirement, not a description of the current Phase 4 worker, which invokes `WorkerJobHandler`.
+Defines the Phase 5 execution system as implemented. `Worker` resolves business executors by job type through `ExecutorRegistry`.
 
 ---
 
@@ -49,7 +49,7 @@ The dependency between worker and executor is strictly one-way:
 
 ### 3.4 Fault Containment & Error Boundary
 - Worker invokes `JobExecutor.execute(job)` inside a defensive try-catch block intercepting `Throwable`.
-- Any exception thrown by an executor is converted to an `ExecutionResult.failure(cause)` and never propagates out to kill the worker thread.
+- `Worker` catches any `Throwable` thrown by an executor, records its diagnostic, and persists the job as `FAILED`; the throwable is not converted to an `ExecutionResult`.
 - Unregistered job types fail fast with status `FAILED` and an error indicating missing executor registration.
 
 ---
@@ -78,3 +78,7 @@ The dependency between worker and executor is strictly one-way:
 ## 7. Phase Ownership
 
 - **Phase 5 (Execution Engine):** Implements `JobExecutor`, `ExecutionResult`, `ExecutorRegistry`, and integrates production job-type dispatch at the worker execution boundary.
+- The registry stores executor instances directly. Implementations must be safe for concurrent invocation when worker concurrency is greater than one.
+- `DefaultExecutorRegistry` uses `ConcurrentHashMap`. Registration replaces any executor already registered for that job type. Null or blank job types and null executors are rejected.
+- Worker failure diagnostics are stored in immutable `Job` metadata under `failure.reason`; `Job.withMetadata(...)` returns a new `Job`.
+- Retry, timeout, dead-letter, and processing-job recovery behavior are outside Phase 5.

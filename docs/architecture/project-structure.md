@@ -79,8 +79,8 @@ The core domain (`job`, `payload`) represents pure business concepts. It must re
    ```
    `application / coordinator` in this diagram is a conceptual coordination layer, not a current Java package. Coordination responsibilities remain in the packages that introduce them; this diagram does not require or introduce an `application` package.
 3. **Worker Execution Boundary:**
-   - Phase 4 `worker` depends on `queue`, `persistence`, and `WorkerJobHandler`; production executor dispatch is introduced in Phase 5.
-   - Phase 5 executors should remain independent of worker machinery.
+   - `worker` depends on `queue`, `persistence`, and the `executor` abstraction to coordinate execution.
+   - `JobExecutor` implementations remain independent of worker machinery, Redis, `JobQueue`, and `WorkerRegistry`.
 4. **Configuration Dependency:**
    - `config` provides operational configuration parameters.
    - Runtime/infrastructure packages (`persistence`, `worker`, `cli`, `api`) may depend on `config`.
@@ -132,13 +132,13 @@ The core domain (`job`, `payload`) represents pure business concepts. It must re
   - **Responsibility:** Worker process model, polling loop, lifecycle management, registration, and heartbeat.
   - **Phase Introduced:** Phase 4
   - **Status:** Implemented in Phase 4
-  - **Implemented Types:** `Worker`, `WorkerId`, `WorkerInfo`, `WorkerStatus`, `WorkerConfig`, `WorkerRegistry`, `RedisWorkerRegistry`, `WorkerJobHandler`, `WorkerException`
-  - **Allowed Dependencies:** `job`, `queue`, `persistence`
+  - **Implemented Types:** `Worker`, `WorkerId`, `WorkerInfo`, `WorkerStatus`, `WorkerConfig`, `WorkerRegistry`, `RedisWorkerRegistry`, `WorkerException`
+  - **Allowed Dependencies:** `job`, `queue`, `persistence`, `executor`
 
 - **`io.github.pandeyayushk.jobstream.executor`**
   - **Responsibility:** Pluggable execution abstraction (`JobExecutor`), execution result model, and executor registry/factory.
   - **Phase Introduced:** Phase 5
-  - **Planned Types:** `JobExecutor`, `ExecutionResult`, `ExecutorRegistry`, `DefaultExecutorRegistry`
+  - **Implemented Types:** `JobExecutor`, `ExecutionResult`, `ExecutorRegistry`, `DefaultExecutorRegistry`
   - **Allowed Dependencies:** `job`, `payload` *(Explicitly: NO dependency on `worker`)*
 
 - **`io.github.pandeyayushk.jobstream.retry`**
@@ -191,9 +191,9 @@ The core domain (`job`, `payload`) represents pure business concepts. It must re
 2. **Mirroring in Tests:** Test packages in `src/test/java` must mirror production packages in `src/main/java` exactly.
 3. **No Premature Directory Creation:** Directories must not be created in `src/` until the phase introducing that package is actively implemented.
 
-## Current State (Phase 4)
+## Current State (Phase 5)
 
 Phase 1 is complete.
 - The `job`, `payload`, `serialization`, `persistence`, and `queue` packages are implemented.
 - The `queue` package contains FIFO Redis list operations and the atomic submission adapter described above.
-- Worker foundation is implemented. Production executor dispatch and retry remain future phases.
+- Worker foundation and production executor dispatch are implemented. Retry remains a later phase.

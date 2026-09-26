@@ -2,24 +2,25 @@
 
 ## 1. Purpose
 
-Describes the Phase 4 worker lifecycle, registry, heartbeat, queue acquisition, and execution boundary as implemented.
+Describes the worker lifecycle, registry, heartbeat, queue acquisition, and Phase 5 executor-based execution boundary as implemented.
 
 ## 2. Acquisition and Processing Flow
 
 ```text
-Worker -> JobQueue -> JobId -> JobRepository -> Job -> WorkerJobHandler
+JobQueue -> JobId -> Worker -> JobRepository -> QUEUED Job
+Worker -> ExecutorRegistry -> JobExecutor -> ExecutionResult -> JobRepository
 ```
 
 `JobQueue` stores and returns `JobId` values only. It does not load jobs or depend on `JobRepository`. The worker performs these steps:
 
 1. Dequeue a `JobId` from the configured queue.
 2. Load the corresponding `Job` from `JobRepository`.
-3. Continue without invoking the handler if no job exists or its status is not `QUEUED`.
+3. Continue without execution if no job exists or its status is not `QUEUED`.
 4. Transition the job to `PROCESSING` and persist it.
-5. Invoke `WorkerJobHandler.handle(processingJob)`.
-6. Persist `COMPLETED` when the handler returns, or `FAILED` when it throws an `Exception`.
+5. Look up a `JobExecutor` by job type through `ExecutorRegistry`.
+6. Persist `COMPLETED` on `ExecutionResult.success()`. Persist `FAILED` if the executor is missing, returns a failure, or throws; store the diagnostic in Job metadata under `failure.reason`.
 
-The handler is the Phase 4 execution boundary and test seam. Phase 4 does not implement the production `JobExecutor` system or retries.
+Worker owns lifecycle transitions around execution. Executor failures do not terminate Worker processing. `JobExecutor` implementations may be invoked concurrently and must be safe for concurrent use.
 
 ## 3. Worker Identity and Metadata
 
@@ -66,12 +67,12 @@ If a `JobId` was dequeued but shutdown starts before submission to the processin
 
 ## 8. Failure and Phase Ownership
 
-- A handler `Exception` marks that job `FAILED`; the worker remains available for later jobs.
+- An executor failure or thrown `Throwable` marks that job `FAILED`; the worker remains available for later jobs.
 - An orphaned `JobId` with no matching job does not terminate the worker.
-- Phase 4 handles `PROCESSING -> COMPLETED` and `PROCESSING -> FAILED`; it does not retry failed jobs.
-- Phase 5 owns the production `JobExecutor` abstraction, executor implementations, dispatch/factory, and job-type execution.
+- Phase 5 handles `PROCESSING -> COMPLETED` and `PROCESSING -> FAILED`; it does not retry failed jobs.
+- Phase 5 failure diagnostics use immutable Job metadata key `failure.reason`.
 - Phase 6 owns retry policy and scheduling, retry counters, `FAILED -> RETRYING`, `RETRYING -> QUEUED`, and dead/retry-exhaustion behavior.
 
 ## 9. Verified Coverage
 
-Worker tests cover startup and registration state, deregistration, queued-job processing, the handler observing `PROCESSING`, handler failure and continued worker operation, orphan IDs, heartbeat scheduling, configured concurrency, stopping further acquisition, waiting for in-flight work, rejecting repeated start, and safe stop from `STOPPED`. Registry tests cover metadata, heartbeat TTL/liveness, listing, and deregistration.
+Worker tests cover startup and registration state, deregistration, queued-job processing, the executor observing `PROCESSING`, executor failure and continued worker operation, orphan IDs, heartbeat scheduling, configured concurrency, stopping further acquisition, waiting for in-flight work, rejecting repeated start, and safe stop from `STOPPED`. Registry tests cover metadata, heartbeat TTL/liveness, listing, and deregistration.
