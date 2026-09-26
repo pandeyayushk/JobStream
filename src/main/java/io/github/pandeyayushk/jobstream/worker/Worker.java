@@ -393,12 +393,10 @@ public class Worker {
         }
     }
 
-    private void markFailed(
-            Job job,
-            String reason
-    ) {
-        Job failedJob =
-                job.withStatus(JobStatus.FAILED);
+    private void markFailed(Job job, String reason) {
+        Job failedJob = job
+                .withStatus(JobStatus.FAILED)
+                .withMetadata("failure.reason", reason);
 
         jobRepository.save(failedJob);
     }
