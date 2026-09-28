@@ -93,4 +93,62 @@ public class JacksonJobSerializerTest {
                 serializer.deserialize(json)
         );
     }
+
+    @Test
+    void retryStateIsPreserved() {
+        JobId id = JobId.generate();
+
+        Instant createdAt =
+                Instant.parse("2026-09-20T10:00:00Z");
+
+        Instant updatedAt =
+                Instant.parse("2026-09-21T10:00:00Z");
+
+        Instant lastFailedAt =
+                Instant.parse("2026-09-21T09:59:00Z");
+
+        Job original =
+                Job.reconstitute(
+                        id,
+                        "Email",
+                        JobStatus.RETRYING,
+                        Payload.empty(),
+                        createdAt,
+                        updatedAt,
+                        Map.of(
+                                "failure.reason",
+                                "temporary failure"
+                        ),
+                        2,
+                        3,
+                        "temporary failure",
+                        lastFailedAt
+                );
+
+        String json =
+                serializer.serialize(original);
+
+        Job restored =
+                serializer.deserialize(json);
+
+        assertEquals(
+                original.retryCount(),
+                restored.retryCount()
+        );
+
+        assertEquals(
+                original.maxRetries(),
+                restored.maxRetries()
+        );
+
+        assertEquals(
+                original.lastErrorReason(),
+                restored.lastErrorReason()
+        );
+
+        assertEquals(
+                original.lastFailedAt(),
+                restored.lastFailedAt()
+        );
+    }
 }

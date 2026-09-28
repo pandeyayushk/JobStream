@@ -34,7 +34,7 @@ Standard FIFO queues treat every job equally and process them immediately upon a
 
 ## 4. Prerequisites
 
-- Phase 7 complete (CLI functional)
+- Phase 7 complete (CLI functional) — prerequisite target; Phase 7 is currently planned
 - Redis instance running
 - Understanding of Redis Sorted Sets (`ZSET`) and time-based scoring
 

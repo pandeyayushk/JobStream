@@ -1,78 +1,46 @@
 # Worker Model Requirements
 
-## 1. Purpose
+Describes the implemented Worker lifecycle, acquisition, execution, and Phase 6 retry integration.
 
-Describes the worker lifecycle, registry, heartbeat, queue acquisition, and Phase 5 executor-based execution boundary as implemented.
-
-## 2. Acquisition and Processing Flow
+## 1. Acquisition and processing flow
 
 ```text
 JobQueue -> JobId -> Worker -> JobRepository -> QUEUED Job
 Worker -> ExecutorRegistry -> JobExecutor -> ExecutionResult -> JobRepository
 ```
 
-`JobQueue` stores and returns `JobId` values only. It does not load jobs or depend on `JobRepository`. The worker performs these steps:
+The queue stores Job IDs only. Worker acquires an ID, loads the authoritative Job, ignores missing or non-`QUEUED` records, persists `PROCESSING`, executes through the registered `JobExecutor`, and persists `COMPLETED` or `FAILED`. Failure reason is recorded in metadata as `failure.reason`.
 
-1. Dequeue a `JobId` from the configured queue.
-2. Load the corresponding `Job` from `JobRepository`.
-3. Continue without execution if no job exists or its status is not `QUEUED`.
-4. Transition the job to `PROCESSING` and persist it.
-5. Look up a `JobExecutor` by job type through `ExecutorRegistry`.
-6. Persist `COMPLETED` on `ExecutionResult.success()`. Persist `FAILED` if the executor is missing, returns a failure, or throws; store the diagnostic in Job metadata under `failure.reason`.
+Acquisition uses `dequeueNonBlocking()`. If the queue is empty, the acquisition loop waits 50 ms and checks again. This short idle wait lets `Worker.stop()` promptly stop acquisition without leaving a thread in a Redis blocking dequeue. It does not implement retry backoff.
 
-Worker owns lifecycle transitions around execution. Executor failures do not terminate Worker processing. `JobExecutor` implementations may be invoked concurrently and must be safe for concurrent use.
+## 2. Retry and failure handling (Phase 6)
 
-## 3. Worker Identity and Metadata
+Worker evaluates `RetryPolicy` after persisting a failed execution. A permitted retry updates the Job to `RETRYING`, then schedules a requeue task on the separate Worker retry scheduler. The processing thread returns to its executor pool immediately and can process another ready Job. At the due time, the scheduler reloads the Job, checks that it is still `RETRYING`, changes it to `QUEUED`, and enqueues its ID. This schedule is in memory only and is not durable across process restarts.
 
-- `WorkerId` is UUID-based.
-- `WorkerInfo` contains only `WorkerId workerId`, `WorkerStatus status`, and `Instant startedAt`.
-- Worker states are `STARTING`, `RUNNING`, `STOPPING`, and `STOPPED`.
+When retry is declined or exhausted, Worker sends the failed Job to `DeadLetterQueue`, where it is persisted as `DEAD`. Manual DLQ requeue returns it to `QUEUED` and resets retry count. Durable delayed scheduling via Redis ZSET and next-run timestamps belongs to Phase 8.
 
-## 4. Configuration
+`maxRetries` counts retries after the first execution. A maximum of two retries allows three executions total.
 
-`WorkerConfig` contains `queueName`, `concurrency`, `heartbeatInterval`, `heartbeatTtl`, and `shutdownTimeout`.
+## 3. Identity, configuration, and concurrency
 
-Defaults are queue `default`, concurrency `4`, heartbeat interval 10 seconds, heartbeat TTL 30 seconds, and shutdown timeout 30 seconds. Durations and concurrency must be positive; heartbeat TTL must be at least one second; heartbeat interval must be less than the TTL. Queue name must be non-null and non-blank.
+`WorkerId` is UUID-based. `WorkerInfo` contains `WorkerId`, `WorkerStatus`, and `startedAt`. Worker statuses are `STARTING`, `RUNNING`, `STOPPING`, and `STOPPED`.
 
-## 5. Concurrency Model
+`WorkerConfig` contains queue name, concurrency, heartbeat interval and TTL, and shutdown timeout. Defaults are `default`, 4, 10 seconds, 30 seconds, and 30 seconds respectively. Each Worker has a single acquisition executor, a fixed processing executor, a semaphore limiting in-flight jobs to configured concurrency, a heartbeat scheduler, and a separate retry scheduler.
 
-Each worker has one dedicated acquisition executor, a fixed processing executor sized to configured concurrency, a semaphore limiting submitted/in-flight processing to that concurrency, and a separate scheduled heartbeat executor. Acquisition is a single loop; processing runs concurrently. The semaphore is acquired before dequeue, so the acquisition loop does not take more jobs while all processing permits are occupied.
+## 4. Registry and Redis resource lifecycle
 
-## 6. Redis Registry and Heartbeat
+`RedisWorkerRegistry` stores metadata in `jobstream:worker:<workerId>` and heartbeat liveness in the corresponding `:heartbeat` key. Heartbeats use `WATCH` with `MULTI`/`EXEC` to avoid refreshing a removed worker. Registry transactions are scoped with try-with-resources so transaction connections are released.
 
-`RedisWorkerRegistry` stores metadata in the hash `jobstream:worker:<workerId>` and liveness in `jobstream:worker:<workerId>:heartbeat`. The heartbeat key is refreshed with Redis expiration using the configured TTL. `getWorker()` reads metadata only. `listActiveWorkers()` uses `SCAN` to find metadata keys and considers a worker active when its heartbeat key exists.
+Redis transactions in `RedisWorkerRegistry`, `RedisJobSubmissionStore`, and `RedisDeadLetterQueue` use try-with-resources. Injected `RedisClient` instances are owned and closed by their creator, not by these collaborators.
 
-Heartbeat uses `WATCH`, `MULTI`, and `EXEC`: it watches the metadata key before refreshing the heartbeat. If the metadata changes or disappears before `EXEC`, the transaction is aborted. This prevents a heartbeat racing with deregistration from recreating or refreshing a stale heartbeat after the worker was removed. Redis transactions do not provide rollback.
-
-`SCAN` is used for active-worker discovery rather than `KEYS`, avoiding a single blocking full-keyspace lookup.
-
-## 7. Lifecycle and Graceful Shutdown
-
-Normal lifecycle:
+## 5. Lifecycle and shutdown
 
 ```text
 STOPPED -> STARTING -> RUNNING -> STOPPING -> STOPPED
 ```
 
-Start registers `STARTING` metadata, creates executors, starts heartbeat scheduling, registers `RUNNING` metadata, then submits acquisition. Shutdown:
+Shutdown marks `STOPPING`, interrupts/stops acquisition and waits within the configured timeout, allows submitted processing to finish within the timeout, stops retry and heartbeat executors, deregisters the Worker, then marks `STOPPED`. A dequeued ID that cannot be submitted because shutdown raced with acquisition is returned to the queue. The acquisition loop is non-blocking with respect to Redis, supporting deterministic shutdown.
 
-1. Changes status from `RUNNING` to `STOPPING`.
-2. Stops job acquisition and waits for its executor to terminate.
-3. Allows already-submitted jobs to finish, bounded by the configured shutdown timeout.
-4. Shuts down heartbeat.
-5. Deregisters the worker.
-6. Changes status to `STOPPED`.
+## 6. Verified Phase 6 coverage
 
-If a `JobId` was dequeued but shutdown starts before submission to the processing executor, acquisition enqueues the ID back onto the configured queue. This protects that job from being silently lost at this race boundary. Processing that exceeds the timeout may be interrupted; shutdown does not promise completion beyond the configured wait.
-
-## 8. Failure and Phase Ownership
-
-- An executor failure or thrown `Throwable` marks that job `FAILED`; the worker remains available for later jobs.
-- An orphaned `JobId` with no matching job does not terminate the worker.
-- Phase 5 handles `PROCESSING -> COMPLETED` and `PROCESSING -> FAILED`; it does not retry failed jobs.
-- Phase 5 failure diagnostics use immutable Job metadata key `failure.reason`.
-- Phase 6 owns retry policy and scheduling, retry counters, `FAILED -> RETRYING`, `RETRYING -> QUEUED`, and dead/retry-exhaustion behavior.
-
-## 9. Verified Coverage
-
-Worker tests cover startup and registration state, deregistration, queued-job processing, the executor observing `PROCESSING`, executor failure and continued worker operation, orphan IDs, heartbeat scheduling, configured concurrency, stopping further acquisition, waiting for in-flight work, rejecting repeated start, and safe stop from `STOPPED`. Registry tests cover metadata, heartbeat TTL/liveness, listing, and deregistration.
+Worker retry integration tests exercise eventual completion after retry, processing another ready job while retry is delayed, exhausted retries and DLQ routing, manual DLQ requeue, failure diagnostics, invalid retry limits, and missing DLQ jobs. Worker lifecycle and Redis registry tests cover start/stop, processing concurrency, heartbeat, and deregistration.

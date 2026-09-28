@@ -10,7 +10,7 @@ The project is being built incrementally, phase by phase, with thorough document
 
 ## Current Status
 
-**Phase 5 - Execution Engine** (implemented)
+**Phase 6 - Reliability & Retry** (complete)
 
 - Maven project: `io.github.pandeyayushk:jobstream:1.0-SNAPSHOT`
 - Java 21 LTS, Maven, JUnit 5
@@ -18,13 +18,16 @@ The project is being built incrementally, phase by phase, with thorough document
 - Domain model: `JobId`, `JobStatus`, `Payload`, and `Job`
 - JSON serialization via Jackson Databind 3.2.2, without Jackson annotations on domain classes
 - Redis persistence via Jedis 8.0.1 `RedisClient`, with authoritative job records and secondary status indexes
-- Redis queueing via `JobQueue` and `RedisJobQueue`, using `LPUSH` with `RPOP`/`BRPOP` for FIFO `JobId` dispatch
+- Redis FIFO queueing via `JobQueue` and `RedisJobQueue`; Worker acquisition uses non-blocking `RPOP` polling with a short idle wait
 - Atomic queue submission through `QueueCoordinator` and `RedisJobSubmissionStore`, using Redis `MULTI`/`EXEC`
 - Worker lifecycle, registry, TTL heartbeat, graceful shutdown, and bounded concurrent processing
 - Type-based execution through `ExecutorRegistry` and `JobExecutor`, with `ExecutionResult` outcomes persisted by Worker
-- Retry behavior belongs to Phase 6
+- Retry policies: no retry, fixed delay, and exponential backoff with jitter
+- In-memory scheduled retry requeueing that leaves processing threads available
+- Retry state persisted as part of each Job record
+- Redis Dead-Letter Queue (DLQ), failure handling, inspection, purge, and manual requeue
 
-Retry and later operational features are not implemented yet.
+Phases 7-10 remain planned; CLI, scheduling/priority, observability/API, and deployment/hardening are not implemented.
 
 ## Technology Stack
 
@@ -85,6 +88,7 @@ JobStream uses a structured documentation system to guide development:
 - [Project Structure](docs/architecture/project-structure.md) - Canonical package and repository layout
 - [System Overview](docs/architecture/system-overview.md) - High-level architecture
 - [Job Lifecycle](docs/architecture/job-lifecycle.md) - Job states and transitions
+- [Phase 6 Reliability & Retry](docs/versions/v6-reliability-and-retry/README.md) - Implemented retry and DLQ behavior
 - [ADR Index](docs/decisions/README.md) - Architecture decision records
 
 ## Development Roadmap
@@ -97,7 +101,7 @@ JobStream uses a structured documentation system to guide development:
 | 3 | Queue System | Complete |
 | 4 | Worker Foundation | Complete |
 | 5 | Execution Engine | Complete |
-| 6 | Reliability & Retry | Planned |
+| 6 | Reliability & Retry | Complete |
 | 7 | CLI | Planned |
 | 8 | Scheduling & Priority | Planned |
 | 9 | Observability & HTTP API | Planned |

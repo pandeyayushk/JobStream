@@ -21,7 +21,11 @@ public class JacksonJobSerializer implements JobSerializer{
             Map<String, Object> payload,
             Instant createdAt,
             Instant updatedAt,
-            Map<String, String> metadata
+            Map<String, String> metadata,
+            int retryCount,
+            int maxRetries,
+            String lastErrorReason,
+            Instant lastFailedAt
     ) {}
 
     private final ObjectMapper mapper = new ObjectMapper();
@@ -34,7 +38,11 @@ public class JacksonJobSerializer implements JobSerializer{
                 job.payload().asMap(),
                 job.createdAt(),
                 job.updatedAt(),
-                job.metadata()
+                job.metadata(),
+                job.retryCount(),
+                job.maxRetries(),
+                job.lastErrorReason().orElse(null),
+                job.lastFailedAt().orElse(null)
         );
         String json;
         try{
@@ -54,8 +62,17 @@ public class JacksonJobSerializer implements JobSerializer{
             JobData jobData=mapper.readValue(json,JobData.class);
             JobId id=JobId.fromString(jobData.id());
             Payload payload=Payload.of(jobData.payload());
-            job=Job.reconstitute(id, jobData.type(),jobData.status(),payload,
-                    jobData.createdAt(),jobData.updatedAt(),jobData.metadata());
+            job=Job.reconstitute(id,
+                    jobData.type(),
+                    jobData.status(),
+                    payload,
+                    jobData.createdAt(),
+                    jobData.updatedAt(),
+                    jobData.metadata(),
+                    jobData.retryCount(),
+                    jobData.maxRetries(),
+                    jobData.lastErrorReason(),
+                    jobData.lastFailedAt());
         }catch (JacksonException | IllegalArgumentException e){
             throw new SerializationException("Failed to deserialize Job",e);
         }

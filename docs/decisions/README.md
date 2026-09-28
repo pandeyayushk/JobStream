@@ -31,6 +31,7 @@ Each ADR should follow this structure:
 - [ADR-005: Atomic Redis Job Submission with MULTI/EXEC](ADR-005-atomic-redis-job-submission-with-multi-exec.md)
 - [ADR-006: Worker Lifecycle, Graceful Shutdown, and Heartbeat](ADR-006-worker-lifecycle-graceful-shutdown-and-heartbeat.md)
 - [ADR-007: Executor System](ADR-007-executor-system.md)
+- [ADR-008: Retry, Failure Handling, and Dead-Letter Queue](ADR-008-retry-and-failure.md) — Accepted; implemented in Phase 6
 
 ## Rule of Thumb
 Trivial decisions don't need ADRs. ADRs are for decisions that affect system architecture, are hard to reverse, or have significant trade-offs.

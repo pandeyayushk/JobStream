@@ -144,7 +144,7 @@ The core domain (`job`, `payload`) represents pure business concepts. It must re
 - **`io.github.pandeyayushk.jobstream.retry`**
   - **Responsibility:** Retry policy evaluation, backoff computation, and Dead-Letter Queue (DLQ) management.
   - **Phase Introduced:** Phase 6
-  - **Planned Types:** `RetryPolicy`, `FixedDelayRetryPolicy`, `ExponentialBackoffRetryPolicy`, `DeadLetterQueue`, `RedisDeadLetterQueue`
+  - **Implemented Types:** `RetryPolicy`, `NoRetryPolicy`, `FixedDelayRetryPolicy`, `ExponentialBackoffRetryPolicy`, `DeadLetterQueue`, `RedisDeadLetterQueue`
   - **Allowed Dependencies:** `job`, `queue`, `persistence`, `config`
 
 - **`io.github.pandeyayushk.jobstream.cli`**
@@ -191,9 +191,6 @@ The core domain (`job`, `payload`) represents pure business concepts. It must re
 2. **Mirroring in Tests:** Test packages in `src/test/java` must mirror production packages in `src/main/java` exactly.
 3. **No Premature Directory Creation:** Directories must not be created in `src/` until the phase introducing that package is actively implemented.
 
-## Current State (Phase 5)
+## Current State (Phase 6)
 
-Phase 1 is complete.
-- The `job`, `payload`, `serialization`, `persistence`, and `queue` packages are implemented.
-- The `queue` package contains FIFO Redis list operations and the atomic submission adapter described above.
-- Worker foundation and production executor dispatch are implemented. Retry remains a later phase.
+Phases 1 through 6 are complete. The `job`, `payload`, `serialization`, `persistence`, `queue`, `worker`, `executor`, and `retry` packages are implemented. Phase 6 adds persisted retry state, policy-based retry decisions, Worker scheduled retry execution, and Redis DLQ operations. Phases 7-10 remain planned; directories shown for those phases describe intended organization, not implemented features.

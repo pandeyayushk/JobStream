@@ -1,87 +1,54 @@
 # Retry and Failure Handling Requirements
 
-## 1. Purpose
+This document records the Phase 6 retry and dead-letter behavior present in JobStream.
 
-Defines how JobStream handles transient execution failures, calculates backoff intervals, preserves worker availability during retry delays, and quarantines permanently failed jobs in a Dead-Letter Queue (DLQ).
+## 1. Job retry state and semantics
 
----
+`Job` stores `retryCount`, `maxRetries`, `lastErrorReason`, and `lastFailedAt`. `maxRetries` means the number of retries allowed after the initial execution. For example, `maxRetries=2` allows an initial attempt plus retry 1 and retry 2 (three executions maximum). `Job` requires `maxRetries > 0`, `retryCount >= 0`, and `retryCount <= maxRetries`.
 
-## 2. Core Architectural Distinctions
+`withRetryAttempt(reason)` accepts only a `FAILED` Job, rejects blank/null reasons and exhausted retry allowance, increments the count, records the failure reason/time, and returns a `RETRYING` Job. `resetRetryForRequeue()` accepts only `DEAD`, returns `QUEUED` with retry count reset to zero, and retains failure diagnostics.
 
-To avoid naive implementations that degrade system performance, the architecture strictly distinguishes between the following concepts:
+## 2. RetryPolicy
 
-1. **Retry Decision:**
-   - Determining *whether* a failed job should be retried based on attempt count (`retryCount < maxRetries`), error category (transient network glitch vs fatal business violation), and job type policy.
-2. **Retry Scheduling (Non-Blocking):**
-   - In production, retrying a job after a backoff delay **MUST NOT** block or sleep worker threads.
-   - Worker threads must immediately become available to process other ready jobs from the queue.
-3. **Delayed Execution:**
-   - Waiting for a backoff delay to elapse requires a time-delayed scheduling mechanism (e.g. Redis Sorted Sets where score = ready timestamp, introduced in Phase 8).
-   - In Phase 6, immediate re-enqueueing or short in-memory test delays may be used as an educational intermediate step, but its limitations must be explicitly documented.
-4. **Retry Exhaustion:**
-   - When attempts reach `maxRetries`, the job transitions from `RETRYING` to `DEAD`.
-5. **Dead-Letter Handling (DLQ):**
-   - Quarantining dead jobs in a dedicated structure (`jobstream:queue:dead-letter`) for operator inspection, diagnosis, and optional manual requeueing.
+The interface exposes `shouldRetry(Job job, Throwable cause)` and `computeBackoff(Job job)`.
 
----
+- `NoRetryPolicy.shouldRetry` is always false and its backoff is zero.
+- `FixedDelayRetryPolicy` returns its configured non-negative delay and permits retry while `retryCount < maxRetries`.
+- `ExponentialBackoffRetryPolicy` uses the same retry-count rule. It calculates `capped = min(baseBackoffMillis * 2^retryCount, maxBackoffMillis)`, then multiplies that cap by a random value in `[0.5, 1.5)` and rounds to the nearest millisecond. Jitter is applied after the cap, so the resulting delay can exceed `maxBackoff` (up to approximately 1.5 times the cap); the configured maximum caps the pre-jitter delay only. The implementation computes using millisecond precision.
 
-## 3. Functional Requirements
+Both built-in retry-capable policies require non-null Job/cause arguments for `shouldRetry`, and non-null Job for `computeBackoff`. Exponential policy requires positive base and maximum durations with base no greater than maximum.
 
-### 3.1 Job Entity Retry Metadata
-- The `Job` domain entity tracks:
-  - `int retryCount`: Current attempt number (starts at 0, increments on each failure).
-  - `int maxRetries`: Maximum allowed retry attempts (default: 3).
-  - `String lastErrorReason`: Diagnostic message from the most recent failure.
-  - `Instant lastFailedAt`: Timestamp of the most recent failure.
+## 3. Worker failure and retry flow
 
-### 3.2 Retry Policy Abstraction (`RetryPolicy`)
-- Interface defining retry rules:
-  - `boolean shouldRetry(Job job, Throwable cause)`: Decides if another attempt is permitted.
-  - `Duration computeBackoff(Job job)`: Computes delay before the next attempt.
-- Built-in strategies:
-  - `FixedDelayRetryPolicy`: Constant delay between attempts.
-  - `ExponentialBackoffRetryPolicy`: Exponentially increasing delay with full randomized jitter to prevent thundering herds:
-    $$\text{delay} = \min(\text{maxBackoff}, \text{baseBackoff} \times 2^{\text{attempt}}) \times \text{random}(0.5, 1.5)$$
-  - `NoRetryPolicy`: Immediately fails without retrying.
+Worker persists `FAILED` with `failure.reason` metadata, then evaluates the policy. If retry is allowed and the retry limit is not exhausted, Worker persists `RETRYING` and schedules a task on its separate scheduled retry executor. When due, that task reloads the Job, verifies it remains `RETRYING`, persists `QUEUED`, and enqueues its `JobId`.
 
-### 3.3 Dead-Letter Queue Abstraction (`DeadLetterQueue`)
-- Technology-neutral interface for dead job quarantine:
-  - `void moveToDeadLetter(Job job, String reason)`: Transitions job status to `DEAD` and moves `JobId` into DLQ list.
-  - `List<Job> listDeadJobs(int offset, int limit)`: Paginated inspection of dead jobs.
-  - `Optional<Job> requeue(JobId jobId, String targetQueue)`: Re-enqueues a dead job into an active queue, resetting its status to `QUEUED`.
-  - `void purge()`: Removes all dead jobs after administrative review.
-  - `long size()`: Returns total count of dead jobs.
-- Storage key: `jobstream:queue:dead-letter`.
+```text
+PROCESSING -> FAILED -> RETRYING -> QUEUED -> PROCESSING
+```
 
----
+The processing task does not wait for the delay; another ready Job can use the processing capacity. The retry schedule is in memory and does not survive Worker/JVM restart. Phase 6 does not provide persistent arbitrary delayed scheduling.
 
-## 4. Worker Availability & Concurrency Rules
+If policy declines retry, attempts are exhausted, or a retry policy/backoff evaluation fails, Worker routes the failed Job to the DLQ:
 
-- **Anti-Pattern Warning:** Putting a worker thread to sleep (`Thread.sleep(delay)`) while holding a job starves worker concurrency and halts processing of healthy jobs.
-- **Production Contract:**
-  - When a job fails and retries remain, the worker updates the job state, increments `retryCount`, marks status `RETRYING`, and passes the job to the scheduling mechanism.
-  - The worker immediately proceeds to the next job in the queue.
-  - In Phase 6, zero-delay or immediate re-enqueueing represents the baseline mechanism; Phase 8 integrates Redis Sorted Set scheduling to support true non-blocking arbitrary delays.
+```text
+PROCESSING -> FAILED -> DEAD -> DLQ
+```
 
----
+## 4. DeadLetterQueue
 
-## 5. Non-Functional Requirements
+`DeadLetterQueue` defines `moveToDeadLetter(Job, reason)`, `listDeadJobs(offset, limit)`, `requeue(JobId, targetQueue)`, `purge()`, and `size()`. `RedisDeadLetterQueue` stores Job IDs in `jobstream:queue:dead-letter`; full `DEAD` Job records remain in the authoritative `jobstream:job:<id>` record, and the status index is updated.
 
-- Zero data loss: Exhausted jobs are never dropped silently; they must reside safely in the DLQ.
-- Re-queue operations from DLQ must be idempotent and atomic.
+`listDeadJobs` reads a list page and loads corresponding records; missing records are skipped. `purge` removes the DLQ list key; it does not delete persisted dead Job records. `size` returns the list length. Manual `requeue` returns empty when the Job does not exist or is not `DEAD`. Otherwise it resets retry count, persists `QUEUED`, removes the ID from the DLQ, updates status indexes, and pushes it to the requested queue in a Redis `MULTI`/`EXEC` transaction.
 
----
+## 5. Worker acquisition and shutdown
 
-## 6. Dependencies
+The current Worker acquisition loop uses `dequeueNonBlocking()` and waits 50 ms when the queue is empty. This allows shutdown to stop acquisition without waiting for a Redis blocking dequeue. The idle acquisition wait is separate from retry backoff: retry delays use the Worker retry scheduler and do not block processing threads.
 
-- Domain Model (Phase 1: `Job`, `JobStatus`, `JobId`)
-- Persistence Layer (Phase 2: `JobRepository`)
-- Queue System (Phase 3: `JobQueue`)
-- Execution Engine (Phase 5: `ExecutionResult`)
+## 6. Phase boundaries
 
----
+- **Phase 6:** retry policies and state, in-memory scheduled retry mechanism, failure handling, DLQ, and manual DLQ requeue.
+- **Phase 8:** persistent delayed scheduling using Redis Sorted Sets (ZSET), durable next-run timestamps, and arbitrary long retry delays.
 
-## 7. Phase Ownership
+## 7. Verified Phase 6 coverage
 
-- **Phase 6 (Reliability & Retry):** Establishes `RetryPolicy`, `DeadLetterQueue`, `RedisDeadLetterQueue`, and worker failure integration.
-- **Phase 8 (Scheduling & Priority):** Provides the non-blocking Redis Sorted Set delayed-job mechanism for long backoffs.
+Tests cover policy decisions, fixed delays, exponential progression and jitter bounds, Job retry state and validation, serialization/persistence round trips, Redis DLQ storage/listing/purge/requeue, retry exhaustion, manual requeue, missing DLQ jobs, failure diagnostics, and processing another ready job while a retry is scheduled. See tests under `src/test/java/io/github/pandeyayushk/jobstream/{job,retry,persistence}`. The test suite uses real Redis for Redis integration tests.

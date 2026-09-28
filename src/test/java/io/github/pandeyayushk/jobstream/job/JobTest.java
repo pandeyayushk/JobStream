@@ -239,4 +239,273 @@ public class JobTest {
                 )
         );
     }
+
+    @Test
+    void newJobStartsWithDefaultRetryState() {
+        Job job = Job.create("test-job", Payload.empty());
+
+        assertEquals(0, job.retryCount());
+        assertEquals(3, job.maxRetries());
+        assertTrue(job.lastErrorReason().isEmpty());
+        assertTrue(job.lastFailedAt().isEmpty());
+    }
+
+    @Test
+    void failedJobCanCreateRetryAttempt() {
+        Job job = Job.create("test-job", Payload.empty())
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED);
+
+        Job retryingJob = job.withRetryAttempt("Connection failed");
+
+        assertEquals(JobStatus.RETRYING, retryingJob.status());
+        assertEquals(1, retryingJob.retryCount());
+        assertEquals(3, retryingJob.maxRetries());
+        assertEquals(
+                "Connection failed",
+                retryingJob.lastErrorReason().orElseThrow()
+        );
+        assertTrue(retryingJob.lastFailedAt().isPresent());
+    }
+
+    @Test
+    void retryAttemptDoesNotMutateOriginalJob() {
+        Job job = Job.create("test-job", Payload.empty())
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED);
+
+        Job retryingJob = job.withRetryAttempt("Temporary failure");
+
+        assertEquals(JobStatus.FAILED, job.status());
+        assertEquals(0, job.retryCount());
+        assertTrue(job.lastErrorReason().isEmpty());
+        assertTrue(job.lastFailedAt().isEmpty());
+
+        assertEquals(JobStatus.RETRYING, retryingJob.status());
+        assertEquals(1, retryingJob.retryCount());
+    }
+
+    @Test
+    void retryCountIncrementsAcrossRetryAttempts() {
+        Job job = Job.create("test-job", Payload.empty())
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED);
+
+        Job firstRetry = job.withRetryAttempt("First failure");
+
+        Job secondFailure = firstRetry
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED);
+
+        Job secondRetry = secondFailure.withRetryAttempt("Second failure");
+
+        assertEquals(1, firstRetry.retryCount());
+        assertEquals(2, secondRetry.retryCount());
+
+        assertEquals(
+                "Second failure",
+                secondRetry.lastErrorReason().orElseThrow()
+        );
+    }
+
+    @Test
+    void retryAttemptRequiresFailedStatus() {
+        Job job = Job.create("test-job", Payload.empty());
+
+        assertThrows(
+                IllegalStateException.class,
+                () -> job.withRetryAttempt("Failure")
+        );
+    }
+
+    @Test
+    void retryAttemptFailsWhenRetriesAreExhausted() {
+        Job job = Job.create("test-job", Payload.empty())
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED);
+
+        Job retry1 = job.withRetryAttempt("Failure 1");
+
+        Job failedAgain1 = retry1
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED);
+
+        Job retry2 = failedAgain1.withRetryAttempt("Failure 2");
+
+        Job failedAgain2 = retry2
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED);
+
+        Job retry3 = failedAgain2.withRetryAttempt("Failure 3");
+
+        assertEquals(3, retry3.retryCount());
+
+        Job failedAgain3 = retry3
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED);
+
+        assertThrows(
+                IllegalStateException.class,
+                () -> failedAgain3.withRetryAttempt("Failure 4")
+        );
+    }
+
+    @Test
+    void retryAttemptRejectsNullFailureReason() {
+        Job job = Job.create("test-job", Payload.empty())
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED);
+
+        assertThrows(
+                NullPointerException.class,
+                () -> job.withRetryAttempt(null)
+        );
+    }
+
+    @Test
+    void retryAttemptRejectsBlankFailureReason() {
+        Job job = Job.create("test-job", Payload.empty())
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> job.withRetryAttempt("   ")
+        );
+    }
+
+    @Test
+    void reconstituteRestoresRetryState() {
+        Instant createdAt = Instant.now().minusSeconds(60);
+        Instant updatedAt = Instant.now();
+        Instant lastFailedAt = Instant.now().minusSeconds(10);
+
+        JobId id = JobId.generate();
+
+        Job job = Job.reconstitute(
+                id,
+                "test-job",
+                JobStatus.RETRYING,
+                Payload.empty(),
+                createdAt,
+                updatedAt,
+                Map.of("key", "value"),
+                2,
+                3,
+                "Connection timeout",
+                lastFailedAt
+        );
+
+        assertEquals(id, job.id());
+        assertEquals(2, job.retryCount());
+        assertEquals(3, job.maxRetries());
+        assertEquals(
+                "Connection timeout",
+                job.lastErrorReason().orElseThrow()
+        );
+        assertEquals(
+                lastFailedAt,
+                job.lastFailedAt().orElseThrow()
+        );
+    }
+
+    @Test
+    void oldReconstituteOverloadUsesDefaultRetryState() {
+        Job job = Job.reconstitute(
+                JobId.generate(),
+                "test-job",
+                JobStatus.PENDING,
+                Payload.empty(),
+                Instant.now(),
+                Instant.now(),
+                Map.of()
+        );
+
+        assertEquals(0, job.retryCount());
+        assertEquals(3, job.maxRetries());
+        assertTrue(job.lastErrorReason().isEmpty());
+        assertTrue(job.lastFailedAt().isEmpty());
+    }
+
+    @Test
+    void resetRetryForRequeueChangesDeadJobToQueuedAndResetsRetryCount() {
+        Job job = Job.create("test-job", Payload.empty());
+
+        Job failed = job
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED);
+
+        Job retrying = failed.withRetryAttempt("temporary failure");
+
+        Job queued = retrying.withStatus(JobStatus.QUEUED);
+
+        Job failedAgain = queued
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED);
+
+        Job dead = failedAgain
+                .withRetryAttempt("another failure")
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED)
+                .withStatus(JobStatus.DEAD);
+
+        Job requeued = dead.resetRetryForRequeue();
+
+        assertEquals(JobStatus.QUEUED, requeued.status());
+        assertEquals(0, requeued.retryCount());
+        assertEquals(dead.maxRetries(), requeued.maxRetries());
+    }
+
+
+    @Test
+    void resetRetryForRequeuePreservesDiagnosticsAndMetadata() {
+        Job job = Job.create("test-job", Payload.empty());
+
+        Job failed = job
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED)
+                .withMetadata("failure.type", "test")
+                .withMetadata("custom.key", "custom-value");
+
+        Job retrying = failed.withRetryAttempt("temporary failure");
+
+        Job dead = retrying
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED)
+                .withStatus(JobStatus.DEAD);
+
+        Job requeued = dead.resetRetryForRequeue();
+
+        assertEquals(dead.lastErrorReason(), requeued.lastErrorReason());
+        assertEquals(dead.lastFailedAt(), requeued.lastFailedAt());
+        assertEquals(dead.metadata(), requeued.metadata());
+        assertEquals(dead.maxRetries(), requeued.maxRetries());
+        assertEquals(0, requeued.retryCount());
+        assertEquals(JobStatus.QUEUED, requeued.status());
+    }
+
+
+    @Test
+    void resetRetryForRequeueRejectsNonDeadJob() {
+        Job job = Job.create("test-job", Payload.empty());
+
+        assertThrows(
+                IllegalStateException.class,
+                job::resetRetryForRequeue
+        );
+    }
 }
