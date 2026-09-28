@@ -72,15 +72,30 @@ public class RedisDeadLetterQueue implements DeadLetterQueue {
 
         String json = serializer.serialize(deadJob);
 
-        try {
-            var transaction = client.multi();
+        try (var transaction = client.multi()) {
 
-            transaction.set(jobKey, json);
-            transaction.srem(oldStatusKey, deadJob.id().toString());
-            transaction.sadd(statusKey, deadJob.id().toString());
-            transaction.lpush(DLQ_KEY, deadJob.id().toString());
+            transaction.set(
+                    jobKey,
+                    json
+            );
+
+            transaction.srem(
+                    oldStatusKey,
+                    deadJob.id().toString()
+            );
+
+            transaction.sadd(
+                    statusKey,
+                    deadJob.id().toString()
+            );
+
+            transaction.lpush(
+                    DLQ_KEY,
+                    deadJob.id().toString()
+            );
 
             transaction.exec();
+
         } catch (JedisException e) {
             throw new RetryException("Failed to move job to dead letter queue",e);
         }
@@ -164,15 +179,36 @@ public class RedisDeadLetterQueue implements DeadLetterQueue {
             Job requeuedJob = job.resetRetryForRequeue();
             String requeuedJson = serializer.serialize(requeuedJob);
 
-            var transaction = client.multi();
+            try (var transaction = client.multi()) {
 
-            transaction.lrem(DLQ_KEY, 1, jobIdValue);
-            transaction.set(jobKey, requeuedJson);
-            transaction.srem(deadStatusKey, jobIdValue);
-            transaction.sadd(queuedStatusKey, jobIdValue);
-            transaction.lpush(targetQueueKey, jobIdValue);
+                transaction.lrem(
+                        DLQ_KEY,
+                        1,
+                        jobIdValue
+                );
 
-            transaction.exec();
+                transaction.set(
+                        jobKey,
+                        requeuedJson
+                );
+
+                transaction.srem(
+                        deadStatusKey,
+                        jobIdValue
+                );
+
+                transaction.sadd(
+                        queuedStatusKey,
+                        jobIdValue
+                );
+
+                transaction.lpush(
+                        targetQueueKey,
+                        jobIdValue
+                );
+
+                transaction.exec();
+            }
 
             return Optional.of(requeuedJob);
 

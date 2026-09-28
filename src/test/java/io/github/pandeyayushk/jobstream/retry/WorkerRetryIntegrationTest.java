@@ -704,7 +704,7 @@ class WorkerRetryIntegrationTest {
                                 1,
                                 Duration.ofSeconds(1),
                                 Duration.ofSeconds(3),
-                                Duration.ofSeconds(1)
+                                Duration.ofSeconds(3)
                         )
                 );
 

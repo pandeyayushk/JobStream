@@ -44,8 +44,7 @@ public class RedisJobSubmissionStore implements JobSubmissionStore {
 
         String json = serializer.serialize(queuedJob);
 
-        try {
-            var transaction = client.multi();
+        try (var transaction = client.multi()){
 
             transaction.set(jobKey, json);
             transaction.srem(oldStatusKey, queuedJob.id().toString());

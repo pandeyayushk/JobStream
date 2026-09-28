@@ -30,13 +30,15 @@ public class RedisWorkerRegistry implements WorkerRegistry{
         String heartbeatKey = workerKey + ":heartbeat";
         Map<String,String> metadata=Map.of("id",info.workerId().toString(),"status",info.status().name()
         ,"startedAt",info.startedAt().toString());
-        try {
-            var transaction = client.multi();
-            transaction.hset(workerKey,metadata);
-            transaction.set(heartbeatKey,"alive");
-            transaction.expire(heartbeatKey, heartbeatTtl.getSeconds());
+        try (var transaction = client.multi()) {
+            transaction.hset(workerKey, metadata);
+            transaction.set(heartbeatKey, "alive");
+            transaction.expire(
+                    heartbeatKey,
+                    heartbeatTtl.getSeconds()
+            );
             transaction.exec();
-        }catch (JedisException e){
+        } catch (JedisException e) {
             throw new WorkerException("Failed to register worker",e);
         }
     }
@@ -106,12 +108,11 @@ public class RedisWorkerRegistry implements WorkerRegistry{
         Objects.requireNonNull(workerId,"WorkerId can not be null");
         String workerKey = "jobstream:worker:" + workerId;
         String heartbeatKey = workerKey + ":heartbeat";
-        try {
-            var transaction=client.multi();
+        try (var transaction = client.multi()) {
             transaction.del(workerKey);
             transaction.del(heartbeatKey);
             transaction.exec();
-        }catch (JedisException e){
+        } catch (JedisException e) {
             throw new WorkerException("Failed to deregister worker",e);
         }
     }

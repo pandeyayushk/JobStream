@@ -24,8 +24,6 @@ import java.util.concurrent.TimeUnit;
 
 public class Worker {
 
-    private static final Duration DEQUEUE_TIMEOUT =
-            Duration.ofMillis(500);
 
     private final WorkerId workerId;
     private final JobQueue queue;
@@ -281,13 +279,20 @@ public class Worker {
                 }
 
                 Optional<JobId> jobId =
-                        queue.dequeue(
-                                config.queueName(),
-                                DEQUEUE_TIMEOUT
+                        queue.dequeueNonBlocking(
+                                config.queueName()
                         );
 
                 if (jobId.isEmpty()) {
                     processingPermits.release();
+
+                    try {
+                        Thread.sleep(50);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+
                     continue;
                 }
 
