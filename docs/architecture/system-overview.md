@@ -1,112 +1,43 @@
 # System Overview
 
-JobStream is a Redis-backed distributed job queue designed to provide reliable, decoupled, and scalable background job processing.
+JobStream is a Redis-backed job queue. Phases 1-6 are implemented. Phases 7-10 remain planned.
 
-> **Note:** Phases 1 through 5 are implemented. Phase 5 provides type-based executor dispatch. Retry belongs to Phase 6; later operational subsystems remain planned.
+## 1. Implemented subsystems
 
----
+1. **Job domain (`job`, `payload`)**: immutable Job state, identity, lifecycle status, payload, and retry diagnostics.
+2. **Serialization and persistence**: Jackson JSON serialization and authoritative Redis Job records with status indexes. Phase 6 retry fields are part of the persisted Job representation.
+3. **Queue (`queue`)**: FIFO Redis lists contain `JobId` values only. Submission atomically persists the queued Job, updates its status index, and enqueues the ID.
+4. **Worker (`worker`)**: lifecycle, registry, heartbeat, bounded processing, queue acquisition, failure handling, retry scheduling, and DLQ integration.
+5. **Execution (`executor`)**: type-based `JobExecutor` dispatch and explicit success/failure results.
+6. **Reliability (`retry`)**: no-retry, fixed-delay, and jittered exponential policies; in-memory scheduled retries; Redis DLQ and manual requeue.
 
-## 1. High-Level Subsystems
+CLI (Phase 7), scheduling and priority (Phase 8), metrics and HTTP API (Phase 9), and deployment/hardening (Phase 10) are not implemented.
 
-The JobStream system consists of the following decoupled subsystems:
+## 2. Data and execution flow
 
-1. **Job Domain (`job`, `payload`)**
-   - Core domain model representing job identity (`JobId`), full lifecycle contract (`JobStatus`), and immutable input data (`Payload`).
-   - Pure domain logic with zero external or infrastructure dependencies.
-2. **Persistence Layer (`persistence`, `serialization`)**
-   - Storage repository abstraction (`JobRepository`) providing durable storage mapping `JobId -> Job record`.
-   - Serialization layer converting domain objects to portable JSON for storage in Redis strings/hashes.
-3. **Queue System (`queue`, `priority`, `schedule`)**
-   - FIFO queue mechanism holding lightweight references (`JobId`).
-   - Decoupled from full job storage; enqueuing places `JobId` onto the queue, and dequeuing retrieves `JobId`.
-   - Priority queues and time-delayed scheduling.
-4. **Worker System (`worker`)**
-   - Manages worker registration, heartbeat-based liveness detection, graceful shutdown, and bounded concurrent processing.
-   - Dequeues `JobId`, fetches the authoritative job from `JobRepository`, claims `QUEUED` jobs, and coordinates execution through `ExecutorRegistry`.
-5. **Execution Engine (`executor`)**
-   - `ExecutorRegistry` resolves a `JobExecutor` by job type. The executor returns an `ExecutionResult`; Worker persists the resulting lifecycle state.
-6. **Reliability Layer (`retry`)**
-   - Handles transient failures with configurable retry policies, non-blocking backoff scheduling, and Dead-Letter Queue (DLQ) quarantine for exhausted failures.
-7. **Management & Observability (`cli`, `api`, `metrics`)**
-   - Command-Line Interface (CLI) and REST HTTP API for system interaction, monitoring, job submission, and DLQ management.
-   - Real-time counters, throughput gauges, and health probes.
-8. **Configuration & Packaging (`config`)**
-   - 12-Factor centralized configuration and multi-stage container packaging.
+The Job repository is authoritative (`JobId -> Job`); active and dead-letter Redis lists carry IDs only.
 
----
+1. A new Job starts `PENDING`.
+2. Queue submission persists `QUEUED` and adds its ID to the selected FIFO list using `MULTI`/`EXEC`.
+3. Worker acquisition polls with `dequeueNonBlocking()`. When empty, the acquisition loop waits 50 ms and retries. This lets `Worker.stop()` end acquisition without waiting for a Redis blocking dequeue.
+4. Worker loads the Job, verifies `QUEUED`, persists `PROCESSING`, then calls its registered executor.
+5. Success persists `COMPLETED`. Failure persists `FAILED` and `failure.reason`, then Phase 6 evaluates retry policy.
+6. For a permitted retry, Worker persists `RETRYING` and schedules a task on its separate in-memory retry scheduler. The processing thread does not wait for the delay. When due, the task verifies the Job remains `RETRYING`, persists `QUEUED`, and enqueues its ID.
+7. If retry is unavailable or exhausted, the Job is persisted as `DEAD` and its ID is placed on `jobstream:queue:dead-letter`.
+8. Manual DLQ requeue uses Redis `MULTI`/`EXEC` to remove the dead-list reference, reset retry count, persist `QUEUED`, update status indexes, and enqueue the ID to the requested queue.
 
-## 2. Core Architectural Flow & Data Flow
+## 3. Retry and phase boundary
 
-### Architecture Baseline: Reference-Based Queueing
+`maxRetries` counts retries after the initial execution. `maxRetries=2` permits at most three executions. `Job` persists retry count, configured limit, last error, and failure timestamp; Jackson serialization retains these fields through Redis reload.
 
-To prevent data duplication and maintain a single source of truth:
-- **Persistence:** Maps `JobId → Job record`. All state mutations, status updates, and retry counts occur here.
-- **Queue:** Maps `Queue → JobId`. The queue holds only lightweight `JobId` references.
+Phase 6 delayed retries use Worker-local scheduled executor state. Pending delays are not durable across process restart, and Phase 6 does not support arbitrary long delays. Phase 8 owns persistent delayed scheduling with Redis Sorted Sets (ZSET) and durable next-run timestamps.
 
-```
-                ┌──────────────────────────────────┐
-                │          JobRepository           │
-                │         (Redis Strings)          │
-                │          JobId → Job             │
-                └────────┬────────────────▲────────┘
-                         │                │
-           1. Save Job   │                │ 5. Update Status
-                         ▼                │    (PROCESSING / COMPLETED / FAILED)
-Producer ────────> [ JobQueue ] ────────> [ Worker ] ────────> [ ExecutorRegistry ]
-                                                                  ↓
-                                                             [ JobExecutor ]
-                                                                  ↓
-                                                          [ ExecutionResult ]
-                                                                  ↓
-                                                          [ JobRepository ]
-   │               (Redis List)              │                        │
-   │               Queue → JobId             │ 4. Execute             │
-   │                     │                   └────────────────────────┘
-   │ 2. Push JobId       │ 3. Pop JobId
-   └─────────────────────┘
-```
+## 4. Worker and Redis lifecycle
 
-### Complete Step-by-Step Data Flow
+Worker owns separate acquisition, processing, heartbeat, and retry executors. Idle acquisition uses a 50 ms wait; retry delay is handled by the retry scheduler, not by sleeping a processing thread. Shutdown stops acquisition, drains/interrupts processing within configured bounds, stops schedulers, and deregisters the Worker.
 
-1. **Job Creation:** Producer instantiates a `Job` with unique `JobId`, `type`, and immutable `Payload` (status: `PENDING`).
-2. **Persistence & Enqueue:**
-   - `QueueCoordinator` creates the `QUEUED` version of the supplied job and delegates to `JobSubmissionStore`.
-   - `RedisJobSubmissionStore` atomically persists that job, moves its status-index entry, and pushes its `JobId` to the target queue with Redis `MULTI`/`EXEC`.
-3. **Worker Acquisition:**
-   - `Worker` polls the configured queue to acquire the next `JobId` (the Redis queue uses a timed blocking dequeue).
-   - Worker fetches the full `Job` record from `JobRepository`.
-   - Worker transitions job status to `PROCESSING` in `JobRepository`.
-4. **Worker execution:** Worker verifies the loaded job is `QUEUED`, persists `PROCESSING`, looks up an executor by `Job.type()`, and invokes it. A missing executor, failure result, or thrown `Throwable` leads to `FAILED`; failures are recorded in metadata as `failure.reason`. A success result leads to `COMPLETED`. Executor failures do not terminate the Worker.
-5. **Later phases:** Phase 6 introduces retry policy, scheduling, and retry exhaustion handling. Retry, timeout, dead-letter behavior, and recovery of `PROCESSING` jobs are outside Phase 5.
+Redis `MULTI` transactions in `RedisJobSubmissionStore`, `RedisWorkerRegistry`, and `RedisDeadLetterQueue` use try-with-resources, releasing transaction resources on completion or failure. Redis clients are injected and owned by their creator.
 
----
+## 5. Package map and future work
 
-## 3. Key Architectural Principles
-
-1. **Dependency Direction Inward:**
-   - The core domain (`job`, `payload`) has zero dependencies on infrastructure, configuration, or execution frameworks.
-   - High-level orchestrators depend on abstractions; infrastructure implements abstractions.
-2. **Separation of Responsibilities:**
-   - `JobQueue` transports `JobId`; `JobRepository` owns authoritative Job state.
-   - Worker coordinates acquisition and execution; `ExecutorRegistry` resolves business executors by job type.
-   - `JobExecutor` contains job-specific execution logic and does not depend on Worker, Redis, `JobQueue`, or `WorkerRegistry`.
-   - `ExecutionResult` communicates the executor outcome. Retry is a later concern.
-3. **Single Source of Truth:**
-   - The `JobRepository` is the sole authoritative store of job state. The queue contains only references (`JobId`).
-4. **Fault Containment:**
-   - Unhandled exceptions or errors in user-defined job executors must never terminate worker threads or corrupt queue state.
-5. **Fail-Safe Operational Defaults:**
-   - Systems fail fast on invalid configurations and default to conservative backoff, explicit timeouts, and bounded concurrency.
-
----
-
-## 4. Planned Technology Stack
-
-- **Java 21 LTS** (Modern language features: records, virtual threads, pattern matching)
-- **Apache Maven** (Standard build and dependency management)
-- **Redis 7+** (Unified backend for persistence, queues, and sorted sets)
-- **JUnit 5** (Unit and integration testing)
-- **Jackson** (JSON serialization across persistence boundary — Phase 2)
-- **Jedis** (Synchronous, pooled Redis client — Phase 2)
-- **Picocli** (Administrative CLI — Phase 7)
-- **Javalin** (Lightweight embedded REST API — Phase 9)
+Implemented packages include `job`, `payload`, `serialization`, `persistence`, `queue`, `worker`, `executor`, and `retry`. Future package responsibilities are CLI (Phase 7), scheduling and priority (Phase 8), metrics and API (Phase 9), and deployment/configuration hardening (Phase 10). See [project structure](project-structure.md) and [job lifecycle](job-lifecycle.md).

@@ -1,81 +1,56 @@
 # Job Lifecycle
 
-This document is the authoritative architectural reference for the complete Job lifecycle in JobStream. It defines all states, legal and illegal transitions, invariants, and which subsystem and project phase owns the implementation of each transition.
+This document describes the lifecycle states, implemented transitions, and subsystem ownership in JobStream.
 
----
+## 1. Lifecycle states
 
-## 1. Complete Domain Lifecycle States
+| State | Meaning |
+|---|---|
+| `PENDING` | A new Job has not yet been submitted to a queue. |
+| `QUEUED` | The Job is persisted and its `JobId` is waiting on a queue. |
+| `PROCESSING` | A Worker has loaded the Job and execution is underway. |
+| `COMPLETED` | The executor succeeded. |
+| `FAILED` | Execution failed; Worker records the reason and evaluates retry policy. |
+| `RETRYING` | A retry was permitted and its delay is pending in the Worker's in-memory retry scheduler. |
+| `DEAD` | Retry is unavailable or exhausted; the Job is in the dead-letter queue. |
 
-The core domain model establishes a closed set of 7 lifecycle states in the `JobStatus` enum (introduced in Phase 1 as the system-wide domain vocabulary):
+## 2. Transition ownership
 
-| State | Definition | Nature |
-|---|---|---|
-| **`PENDING`** | Job entity has been instantiated, but has not yet been placed into a queue. | Transient (Initial) |
-| **`QUEUED`** | Job state is persisted and its `JobId` resides in an active queue awaiting acquisition. | Passive / Waiting |
-| **`PROCESSING`** | `JobId` has been dequeued by an active worker; execution logic is currently running. | Active |
-| **`COMPLETED`** | The job's execution logic finished successfully with all side effects confirmed. | **Terminal** |
-| **`FAILED`** | The execution logic threw an unhandled error or returned a failure result. | Transient / Evaluative |
-| **`RETRYING`** | The retry policy permitted another attempt; the job is awaiting backoff delay before re-enqueueing. | Waiting |
-| **`DEAD`** | All retry attempts have been exhausted; the job is quarantined in the Dead-Letter Queue (DLQ). | **Terminal (Quarantine)** |
-
----
-
-## 2. State Transition Matrix & Subsystem Ownership
-
-A crucial architectural distinction exists between **defining the lifecycle contract** (established in Phase 1) and **implementing the subsystem that triggers a transition** (introduced incrementally across phases).
-
-```
-                 ┌────────────────────────────────────────────────────────┐
-                 │                                                        │
-                 ▼                                                        │
-[ PENDING ] ─────────> [ QUEUED ] ─────────> [ PROCESSING ] ─────────> [ COMPLETED ]*
-                           ▲                     │
-                           │                     │
-                           │                     ▼
-                     [ RETRYING ] <───────── [ FAILED ]
-                                                 │
-                                                 │
-                                                 ▼
-                                             [ DEAD ]*
-                                                 │
-                                                 │ (Manual operator requeue)
-                                                 └───────────> [ QUEUED ]
-
-* Terminal state
-```
-
-### Transition Specifications
-
-| Transition | Triggering Subsystem | Implementing Phase | Description & Invariants |
+| Transition | Owner | Phase | Implemented behavior |
 |---|---|---|---|
-| **`PENDING → QUEUED`** | **Producer / Queue System** | **Phase 3** | Occurs when a client submits a job. Job is saved to `JobRepository` and its `JobId` is atomically pushed to `JobQueue`. |
-| **`QUEUED → PROCESSING`** | **Worker Acquisition** | **Phase 4** | After `JobQueue` returns a `JobId`, a worker loads the authoritative job from `JobRepository` and claims it. Dequeue itself does not change job status. |
-| **`PROCESSING → COMPLETED`** | **Worker** | **Phase 5** | Occurs when the registered `JobExecutor` returns `ExecutionResult.success()`; Worker persists the completed job. |
-| **`PROCESSING → FAILED`** | **Worker** | **Phase 5** | Occurs when no executor is registered, the executor returns a failure result, or it throws. Worker persists `failure.reason` in Job metadata and continues. Retry is not part of Phase 5. |
-| **`FAILED → RETRYING`** | **Reliability Subsystem** | **Phase 6** | Occurs when `RetryPolicy.shouldRetry(...)` evaluates to `true`. Retry attempt counter is incremented. |
-| **`RETRYING → QUEUED`** | **Reliability / Scheduler** | **Phase 6 (immediate/timer) / Phase 8 (ZSET)** | Occurs after backoff delay elapses. `JobId` is placed back onto the active queue for worker acquisition. |
-| **`FAILED → DEAD`** | **Reliability Subsystem** | **Phase 6** | Occurs when retry attempts reach `maxRetries`. Job is moved to the Dead-Letter Queue (`jobstream:queue:dead-letter`). |
-| **`DEAD → QUEUED`** | **Operator / CLI / API** | **Phase 6 (DLQ API) / Phase 7 (CLI) / Phase 9 (API)** | Exceptional administrative intervention. An operator inspects the dead job and manually triggers a requeue. |
+| `PENDING -> QUEUED` | Queue submission | 3 | The queued Job, status index, and queue ID are submitted atomically. |
+| `QUEUED -> PROCESSING` | Worker acquisition | 4 | Worker acquires the ID, loads the authoritative Job, and saves `PROCESSING`. |
+| `PROCESSING -> COMPLETED` | JobExecutor success through Worker | 5 | Worker persists the successful result. |
+| `PROCESSING -> FAILED` | Execution failure through Worker | 5 | Missing executor, failure result, or thrown failure is recorded in `failure.reason`. |
+| `FAILED -> RETRYING` | RetryPolicy and Worker | 6 | When retry is permitted and remains available, `withRetryAttempt` increments the retry count and records the latest failure. |
+| `RETRYING -> QUEUED` | Worker retry scheduler | 6 | After the scheduled delay, Worker saves `QUEUED` and enqueues the ID. Scheduling is in memory, not durable. |
+| `FAILED -> DEAD` | Worker and DeadLetterQueue | 6 | A no-retry decision or exhausted retry allowance persists `DEAD` and adds the ID to the DLQ. |
+| `DEAD -> QUEUED` | DeadLetterQueue manual requeue | 6 | An atomic Redis transaction removes the DLQ entry, resets retry count, saves `QUEUED`, and enqueues the ID. |
 
----
+## 3. Retry semantics
 
-## 3. Illegal Transitions
+`maxRetries` is the number of retries permitted after the initial execution attempt. Thus `maxRetries=2` permits three executions: initial attempt, retry 1, and retry 2. `Job` rejects `maxRetries <= 0` and retry counts outside `0..maxRetries`.
 
-To protect system integrity, the following transitions are strictly illegal and must be rejected with an `IllegalStateException`:
+Failure handling follows one of these paths:
 
-- **`PENDING → PROCESSING`**: A job cannot be processed without first being enqueued and claimed via the queue.
-- **`PENDING → COMPLETED` / `FAILED`**: Phase 1 establishes domain types, but does NOT allow arbitrary jumping from creation directly to completed/failed without execution.
-- **`COMPLETED → *`**: `COMPLETED` is strictly terminal. A completed job can never be re-executed, re-queued, or marked failed.
-- **`PROCESSING → QUEUED`**: A processing job cannot jump directly back to the queue without going through failure/retry or explicit abandonment recovery.
-- **`DEAD → PROCESSING`**: A dead job cannot be claimed directly by a worker; it must be explicitly re-queued to `QUEUED` by an operator first.
-- **`RETRYING → COMPLETED`**: A job awaiting retry cannot magically succeed without being re-executed.
+```text
+PROCESSING -> FAILED -> RETRYING -> QUEUED -> PROCESSING
+                         (scheduled retry)
 
----
+PROCESSING -> FAILED -> DEAD -> DLQ
+```
 
-## 4. System Invariants
+`Job.withRetryAttempt(reason)` is valid from `FAILED`, increments `retryCount`, and updates `lastErrorReason` and `lastFailedAt`. `resetRetryForRequeue()` is valid from `DEAD`, returns the Job to `QUEUED`, and resets `retryCount` to zero; the most recent failure diagnostics remain available.
 
-1. **Single State at Any Point:** A job can occupy exactly one state at any given millisecond.
-2. **Strict Unidirectionality:** Lifecycle moves forward along defined pathways. There are no reverse transitions except the explicit `RETRYING → QUEUED` and administrative `DEAD → QUEUED`.
-3. **Only `QUEUED` Jobs are Claimable:** A worker thread may only claim and transition a job from `QUEUED` to `PROCESSING`.
-4. **State Transition Atomicity:** In a distributed multi-worker environment, status updates in `JobRepository` must be atomic to avoid race conditions (e.g. two workers claiming the same job).
-5. **Phase 1 Responsibility Boundary:** Phase 1 defines the `JobStatus` enum and validates a proposed target through `isValidTransition(JobStatus target)`. Phase 1 **does not** execute jobs, enqueue jobs, or claim jobs.
+Phase 6 retry delays are held by the Worker's scheduled executor and are not durable across process restart. Phase 8 owns persistent delayed scheduling, Redis Sorted Sets (ZSET), durable next-run timestamps, and arbitrary long retry delays.
+
+## 4. Lifecycle invariants and limits
+
+- The persisted Job is authoritative; Redis active and dead-letter queues store `JobId` references.
+- Only `QUEUED` Jobs are eligible for Worker execution.
+- `COMPLETED` is terminal. `DEAD` remains quarantined until explicitly requeued.
+- Job status transitions are validated by `JobStatus`; `JobRepository.save` itself is not an atomic compare-and-set claim operation.
+
+## 5. Worker acquisition and shutdown
+
+The current acquisition loop calls `dequeueNonBlocking()` and, when empty, waits briefly (50 ms) before trying again. This avoids leaving the acquisition thread blocked in Redis during `Worker.stop()` and makes shutdown deterministic. This short wait belongs only to idle queue acquisition; retry backoff runs on the separate Worker retry scheduler and never sleeps a processing thread.
