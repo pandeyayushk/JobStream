@@ -269,6 +269,28 @@ public final class Job {
         );
     }
 
+    public Job resetRetryForRequeue() {
+        if (status != JobStatus.DEAD) {
+            throw new IllegalStateException(
+                    "Only dead jobs can be requeued"
+            );
+        }
+
+        return new Job(
+                id,
+                type,
+                JobStatus.QUEUED,
+                payload,
+                createdAt,
+                Instant.now(),
+                metadata,
+                0,
+                maxRetries,
+                lastErrorReason,
+                lastFailedAt
+        );
+    }
+
     public JobId id() {
         return id;
     }

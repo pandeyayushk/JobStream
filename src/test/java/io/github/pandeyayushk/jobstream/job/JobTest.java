@@ -436,4 +436,76 @@ public class JobTest {
         assertTrue(job.lastErrorReason().isEmpty());
         assertTrue(job.lastFailedAt().isEmpty());
     }
+
+    @Test
+    void resetRetryForRequeueChangesDeadJobToQueuedAndResetsRetryCount() {
+        Job job = Job.create("test-job", Payload.empty());
+
+        Job failed = job
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED);
+
+        Job retrying = failed.withRetryAttempt("temporary failure");
+
+        Job queued = retrying.withStatus(JobStatus.QUEUED);
+
+        Job failedAgain = queued
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED);
+
+        Job dead = failedAgain
+                .withRetryAttempt("another failure")
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED)
+                .withStatus(JobStatus.DEAD);
+
+        Job requeued = dead.resetRetryForRequeue();
+
+        assertEquals(JobStatus.QUEUED, requeued.status());
+        assertEquals(0, requeued.retryCount());
+        assertEquals(dead.maxRetries(), requeued.maxRetries());
+    }
+
+
+    @Test
+    void resetRetryForRequeuePreservesDiagnosticsAndMetadata() {
+        Job job = Job.create("test-job", Payload.empty());
+
+        Job failed = job
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED)
+                .withMetadata("failure.type", "test")
+                .withMetadata("custom.key", "custom-value");
+
+        Job retrying = failed.withRetryAttempt("temporary failure");
+
+        Job dead = retrying
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED)
+                .withStatus(JobStatus.DEAD);
+
+        Job requeued = dead.resetRetryForRequeue();
+
+        assertEquals(dead.lastErrorReason(), requeued.lastErrorReason());
+        assertEquals(dead.lastFailedAt(), requeued.lastFailedAt());
+        assertEquals(dead.metadata(), requeued.metadata());
+        assertEquals(dead.maxRetries(), requeued.maxRetries());
+        assertEquals(0, requeued.retryCount());
+        assertEquals(JobStatus.QUEUED, requeued.status());
+    }
+
+
+    @Test
+    void resetRetryForRequeueRejectsNonDeadJob() {
+        Job job = Job.create("test-job", Payload.empty());
+
+        assertThrows(
+                IllegalStateException.class,
+                job::resetRetryForRequeue
+        );
+    }
 }
