@@ -6,6 +6,10 @@ import io.github.pandeyayushk.jobstream.job.JobStatus;
 import io.github.pandeyayushk.jobstream.payload.Payload;
 import io.github.pandeyayushk.jobstream.persistence.RedisJobRepository;
 import io.github.pandeyayushk.jobstream.queue.RedisJobQueue;
+import io.github.pandeyayushk.jobstream.retry.DeadLetterQueue;
+import io.github.pandeyayushk.jobstream.retry.NoRetryPolicy;
+import io.github.pandeyayushk.jobstream.retry.RedisDeadLetterQueue;
+import io.github.pandeyayushk.jobstream.retry.RetryPolicy;
 import io.github.pandeyayushk.jobstream.serialization.JacksonJobSerializer;
 import io.github.pandeyayushk.jobstream.serialization.JobSerializer;
 import io.github.pandeyayushk.jobstream.worker.*;
@@ -28,6 +32,8 @@ class WorkerExecutionIntegrationTest {
     private RedisWorkerRegistry workerRegistry;
     private DefaultExecutorRegistry executorRegistry;
     private Worker worker;
+    private RetryPolicy retryPolicy;
+    private DeadLetterQueue deadLetterQueue;
 
     @BeforeEach
     void setUp() {
@@ -57,6 +63,22 @@ class WorkerExecutionIntegrationTest {
 
         executorRegistry =
                 new DefaultExecutorRegistry();
+
+        /*
+         * These tests are validating the Worker execution engine,
+         * not automatic retry behavior.
+         *
+         * NoRetryPolicy means an execution failure is routed to
+         * the Phase 6 Dead-Letter Queue.
+         */
+        retryPolicy =
+                new NoRetryPolicy();
+
+        deadLetterQueue =
+                new RedisDeadLetterQueue(
+                        client,
+                        serializer
+                );
     }
 
     @AfterEach
@@ -77,6 +99,7 @@ class WorkerExecutionIntegrationTest {
                 queuedJob("test-job");
 
         repository.save(job);
+
         queue.enqueue(
                 job.id(),
                 "default"
@@ -108,13 +131,14 @@ class WorkerExecutionIntegrationTest {
     }
 
     @Test
-    void executorFailureMarksJobFailed()
+    void executorFailureMovesJobToDeadLetterQueue()
             throws Exception {
 
         Job job =
                 queuedJob("test-job");
 
         repository.save(job);
+
         queue.enqueue(
                 job.id(),
                 "default"
@@ -133,12 +157,17 @@ class WorkerExecutionIntegrationTest {
 
         waitForStatus(
                 job.id(),
-                JobStatus.FAILED
+                JobStatus.DEAD
         );
 
         assertEquals(
-                JobStatus.FAILED,
+                JobStatus.DEAD,
                 findJob(job.id()).status()
+        );
+
+        assertEquals(
+                1,
+                deadLetterQueue.size()
         );
 
         assertEquals(
@@ -148,7 +177,7 @@ class WorkerExecutionIntegrationTest {
     }
 
     @Test
-    void executorExceptionMarksJobFailedAndWorkerContinues()
+    void executorExceptionMovesJobToDeadLetterQueueAndWorkerContinues()
             throws Exception {
 
         Job failingJob =
@@ -190,7 +219,7 @@ class WorkerExecutionIntegrationTest {
 
         waitForStatus(
                 failingJob.id(),
-                JobStatus.FAILED
+                JobStatus.DEAD
         );
 
         waitForStatus(
@@ -199,7 +228,7 @@ class WorkerExecutionIntegrationTest {
         );
 
         assertEquals(
-                JobStatus.FAILED,
+                JobStatus.DEAD,
                 findJob(failingJob.id()).status()
         );
 
@@ -212,16 +241,22 @@ class WorkerExecutionIntegrationTest {
                 WorkerStatus.RUNNING,
                 worker.status()
         );
+
+        assertEquals(
+                1,
+                deadLetterQueue.size()
+        );
     }
 
     @Test
-    void missingExecutorMarksJobFailed()
+    void missingExecutorMovesJobToDeadLetterQueue()
             throws Exception {
 
         Job job =
                 queuedJob("missing-executor");
 
         repository.save(job);
+
         queue.enqueue(
                 job.id(),
                 "default"
@@ -233,12 +268,17 @@ class WorkerExecutionIntegrationTest {
 
         waitForStatus(
                 job.id(),
-                JobStatus.FAILED
+                JobStatus.DEAD
         );
 
         assertEquals(
-                JobStatus.FAILED,
+                JobStatus.DEAD,
                 findJob(job.id()).status()
+        );
+
+        assertEquals(
+                1,
+                deadLetterQueue.size()
         );
 
         assertEquals(
@@ -306,7 +346,7 @@ class WorkerExecutionIntegrationTest {
 
         waitForStatus(
                 failureJob.id(),
-                JobStatus.FAILED
+                JobStatus.DEAD
         );
 
         assertEquals(
@@ -315,7 +355,7 @@ class WorkerExecutionIntegrationTest {
         );
 
         assertEquals(
-                JobStatus.FAILED,
+                JobStatus.DEAD,
                 findJob(failureJob.id()).status()
         );
 
@@ -327,6 +367,11 @@ class WorkerExecutionIntegrationTest {
         assertEquals(
                 1,
                 failureExecutions.get()
+        );
+
+        assertEquals(
+                1,
+                deadLetterQueue.size()
         );
     }
 
@@ -372,7 +417,7 @@ class WorkerExecutionIntegrationTest {
 
         waitForStatus(
                 firstJob.id(),
-                JobStatus.FAILED
+                JobStatus.DEAD
         );
 
         waitForStatus(
@@ -381,7 +426,7 @@ class WorkerExecutionIntegrationTest {
         );
 
         assertEquals(
-                JobStatus.FAILED,
+                JobStatus.DEAD,
                 findJob(firstJob.id()).status()
         );
 
@@ -393,6 +438,62 @@ class WorkerExecutionIntegrationTest {
         assertEquals(
                 WorkerStatus.RUNNING,
                 worker.status()
+        );
+
+        assertEquals(
+                1,
+                deadLetterQueue.size()
+        );
+    }
+
+    @Test
+    void executorFailurePersistsFailureReason()
+            throws Exception {
+
+        Job job =
+                queuedJob("test-job");
+
+        repository.save(job);
+
+        queue.enqueue(
+                job.id(),
+                "default"
+        );
+
+        executorRegistry.register(
+                "test-job",
+                new FailingExecutor(
+                        "intentional executor failure"
+                )
+        );
+
+        worker = createWorker();
+
+        worker.start();
+
+        waitForStatus(
+                job.id(),
+                JobStatus.DEAD
+        );
+
+        Job deadJob =
+                repository.findById(job.id())
+                        .orElseThrow();
+
+        assertEquals(
+                JobStatus.DEAD,
+                deadJob.status()
+        );
+
+        assertEquals(
+                "intentional executor failure",
+                deadJob.metadata()
+                        .get("failure.reason")
+        );
+
+        assertEquals(
+                1,
+                deadLetterQueue.size()
         );
     }
 
@@ -406,17 +507,16 @@ class WorkerExecutionIntegrationTest {
                         Duration.ofSeconds(3)
                 );
 
-        Worker worker =
-                new Worker(
-                        WorkerId.generate(),
-                        queue,
-                        repository,
-                        workerRegistry,
-                        executorRegistry,
-                        config
-                );
-
-        return worker;
+        return new Worker(
+                WorkerId.generate(),
+                queue,
+                repository,
+                workerRegistry,
+                executorRegistry,
+                retryPolicy,
+                deadLetterQueue,
+                config
+        );
     }
 
     private Job queuedJob(String type) {
@@ -471,47 +571,6 @@ class WorkerExecutionIntegrationTest {
                         + (actual == null
                         ? "MISSING"
                         : actual.status())
-        );
-    }
-
-    @Test
-    void executorFailurePersistsFailureReason()
-            throws Exception {
-
-        Job job =
-                queuedJob("test-job");
-
-        repository.save(job);
-
-        queue.enqueue(
-                job.id(),
-                "default"
-        );
-
-        executorRegistry.register(
-                "test-job",
-                new FailingExecutor(
-                        "intentional executor failure"
-                )
-        );
-
-        worker = createWorker();
-
-        worker.start();
-
-        waitForStatus(
-                job.id(),
-                JobStatus.FAILED
-        );
-
-        Job failedJob =
-                repository.findById(job.id())
-                        .orElseThrow();
-
-        assertEquals(
-                "intentional executor failure",
-                failedJob.metadata()
-                        .get("failure.reason")
         );
     }
 }

@@ -8,6 +8,8 @@ import io.github.pandeyayushk.jobstream.job.JobStatus;
 import io.github.pandeyayushk.jobstream.payload.Payload;
 import io.github.pandeyayushk.jobstream.persistence.JobRepository;
 import io.github.pandeyayushk.jobstream.queue.JobQueue;
+import io.github.pandeyayushk.jobstream.retry.NoOpDeadLetterQueue;
+import io.github.pandeyayushk.jobstream.retry.NoRetryPolicy;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -652,6 +654,8 @@ class WorkerTest {
                 repository,
                 registry,
                 executorRegistry,
+                new NoRetryPolicy(),
+                new NoOpDeadLetterQueue(),
                 config
         );
 
