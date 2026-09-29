@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import picocli.CommandLine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class JobStreamCliTest {
@@ -58,5 +59,16 @@ class JobStreamCliTest {
         int exitCode = new CommandLine(cli).execute("--unknown");
 
         assertTrue(exitCode != 0);
+    }
+
+    @Test
+    void exposesCliContext() {
+        JobStreamCli cli = new JobStreamCli();
+
+        new CommandLine(cli).execute();
+
+        assertNotNull(cli.context());
+
+        cli.context().close();
     }
 }
