@@ -218,28 +218,90 @@ class DlqCommandIntegrationTest {
     }
 
     @Test
-    void purgesPopulatedDeadLetterQueue() {
+    void purgesPopulatedDeadLetterQueueWhenConfirmedWithY() {
         moveFailedJobToDlq("first failure");
         moveFailedJobToDlq("second failure");
         assertEquals(2L, deadLetterQueue.size());
 
+        System.setIn(new ByteArrayInputStream("y\n".getBytes(StandardCharsets.UTF_8)));
         JobStreamCli cli = new JobStreamCli();
         int exitCode = JobStreamCli.createCommandLine(cli).execute("dlq", "purge");
 
         assertEquals(0, exitCode);
-        assertTrue(output.toString().contains("Purged 2 job(s) from the dead letter queue."));
+        String out = output.toString();
+        assertTrue(out.contains("Are you sure you want to purge 2 job(s) from the dead letter queue? (y/N):"));
+        assertTrue(out.contains("Purged 2 job(s) from the dead letter queue."));
         assertEquals(0L, deadLetterQueue.size());
 
         cli.close();
     }
 
     @Test
-    void purgesEmptyDeadLetterQueue() {
+    void purgesPopulatedDeadLetterQueueWhenConfirmedWithWordYes() {
+        moveFailedJobToDlq("first failure");
+        assertEquals(1L, deadLetterQueue.size());
+
+        System.setIn(new ByteArrayInputStream("yes\n".getBytes(StandardCharsets.UTF_8)));
         JobStreamCli cli = new JobStreamCli();
         int exitCode = JobStreamCli.createCommandLine(cli).execute("dlq", "purge");
 
         assertEquals(0, exitCode);
-        assertTrue(output.toString().contains("Purged 0 job(s) from the dead letter queue."));
+        String out = output.toString();
+        assertTrue(out.contains("Purged 1 job(s) from the dead letter queue."));
+        assertEquals(0L, deadLetterQueue.size());
+
+        cli.close();
+    }
+
+    @Test
+    void doesNotPurgePopulatedDeadLetterQueueWhenConfirmationDeclined() {
+        moveFailedJobToDlq("first failure");
+        moveFailedJobToDlq("second failure");
+        assertEquals(2L, deadLetterQueue.size());
+
+        System.setIn(new ByteArrayInputStream("n\n".getBytes(StandardCharsets.UTF_8)));
+        JobStreamCli cli = new JobStreamCli();
+        int exitCode = JobStreamCli.createCommandLine(cli).execute("dlq", "purge");
+
+        assertEquals(0, exitCode);
+        String out = output.toString();
+        assertTrue(out.contains("Are you sure you want to purge 2 job(s) from the dead letter queue? (y/N):"));
+        assertTrue(out.contains("Purge cancelled."));
+        assertFalse(out.contains("Purged"));
+        assertEquals(2L, deadLetterQueue.size());
+
+        cli.close();
+    }
+
+    @Test
+    void doesNotPurgePopulatedDeadLetterQueueWhenConfirmationEmpty() {
+        moveFailedJobToDlq("first failure");
+        moveFailedJobToDlq("second failure");
+        assertEquals(2L, deadLetterQueue.size());
+
+        System.setIn(new ByteArrayInputStream("\n".getBytes(StandardCharsets.UTF_8)));
+        JobStreamCli cli = new JobStreamCli();
+        int exitCode = JobStreamCli.createCommandLine(cli).execute("dlq", "purge");
+
+        assertEquals(0, exitCode);
+        String out = output.toString();
+        assertTrue(out.contains("Purge cancelled."));
+        assertFalse(out.contains("Purged"));
+        assertEquals(2L, deadLetterQueue.size());
+
+        cli.close();
+    }
+
+    @Test
+    void handlesEmptyDeadLetterQueueCleanly() {
+        JobStreamCli cli = new JobStreamCli();
+        int exitCode = JobStreamCli.createCommandLine(cli).execute("dlq", "purge");
+
+        assertEquals(0, exitCode);
+        String out = output.toString();
+        assertTrue(out.contains("Dead letter queue is empty."));
+        assertFalse(out.contains("Are you sure"));
+        assertEquals(0L, deadLetterQueue.size());
 
         cli.close();
     }
