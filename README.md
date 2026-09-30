@@ -10,7 +10,7 @@ The project is being built incrementally, phase by phase, with thorough document
 
 ## Current Status
 
-**Phase 6 - Reliability & Retry** (complete)
+**Phase 7 - CLI** (complete)
 
 - Maven project: `io.github.pandeyayushk:jobstream:1.0-SNAPSHOT`
 - Java 21 LTS, Maven, JUnit 5
@@ -26,8 +26,9 @@ The project is being built incrementally, phase by phase, with thorough document
 - In-memory scheduled retry requeueing that leaves processing threads available
 - Retry state persisted as part of each Job record
 - Redis Dead-Letter Queue (DLQ), failure handling, inspection, purge, and manual requeue
+- Picocli command-line interface for job submission/status, queue inspection, worker listing, and DLQ operations
 
-Phases 7-10 remain planned; CLI, scheduling/priority, observability/API, and deployment/hardening are not implemented.
+Phases 0-7 are complete. Scheduling/priority (Phase 8), observability/API (Phase 9), and deployment/hardening (Phase 10) remain planned.
 
 ## Technology Stack
 
@@ -89,6 +90,7 @@ JobStream uses a structured documentation system to guide development:
 - [System Overview](docs/architecture/system-overview.md) - High-level architecture
 - [Job Lifecycle](docs/architecture/job-lifecycle.md) - Job states and transitions
 - [Phase 6 Reliability & Retry](docs/versions/v6-reliability-and-retry/README.md) - Implemented retry and DLQ behavior
+- [Phase 7 CLI](docs/versions/v7-cli/README.md) - Implemented Picocli operational commands
 - [ADR Index](docs/decisions/README.md) - Architecture decision records
 
 ## Development Roadmap
@@ -102,7 +104,7 @@ JobStream uses a structured documentation system to guide development:
 | 4 | Worker Foundation | Complete |
 | 5 | Execution Engine | Complete |
 | 6 | Reliability & Retry | Complete |
-| 7 | CLI | Planned |
+| 7 | CLI | Complete |
 | 8 | Scheduling & Priority | Planned |
 | 9 | Observability & HTTP API | Planned |
 | 10 | Deployment & Hardening | Planned |

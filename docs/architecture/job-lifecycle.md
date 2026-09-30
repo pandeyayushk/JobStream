@@ -2,6 +2,8 @@
 
 This document describes the lifecycle states, implemented transitions, and subsystem ownership in JobStream.
 
+The Phase 7 CLI exposes job submission through `QueueCoordinator` and job inspection through the authoritative `JobRepository`. It reports lifecycle state and retry/failure metadata; it does not define or replace lifecycle transitions.
+
 ## 1. Lifecycle states
 
 | State | Meaning |
