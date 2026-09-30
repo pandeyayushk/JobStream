@@ -1,6 +1,6 @@
 # System Overview
 
-JobStream is a Redis-backed job queue. Phases 1-6 are implemented. Phases 7-10 remain planned.
+JobStream is a Redis-backed job queue. Phases 1-7 are implemented. Phases 8-10 remain planned.
 
 ## 1. Implemented subsystems
 
@@ -10,8 +10,9 @@ JobStream is a Redis-backed job queue. Phases 1-6 are implemented. Phases 7-10 r
 4. **Worker (`worker`)**: lifecycle, registry, heartbeat, bounded processing, queue acquisition, failure handling, retry scheduling, and DLQ integration.
 5. **Execution (`executor`)**: type-based `JobExecutor` dispatch and explicit success/failure results.
 6. **Reliability (`retry`)**: no-retry, fixed-delay, and jittered exponential policies; in-memory scheduled retries; Redis DLQ and manual requeue.
+7. **CLI (`cli`)**: Picocli operator commands over the existing submission, repository, queue, worker-registry, and DLQ abstractions. A shared lazy context owns the Redis client lifecycle.
 
-CLI (Phase 7), scheduling and priority (Phase 8), metrics and HTTP API (Phase 9), and deployment/hardening (Phase 10) are not implemented.
+Scheduling and priority (Phase 8), metrics and HTTP API (Phase 9), and deployment/hardening (Phase 10) are not implemented.
 
 ## 2. Data and execution flow
 
@@ -40,4 +41,4 @@ Redis `MULTI` transactions in `RedisJobSubmissionStore`, `RedisWorkerRegistry`, 
 
 ## 5. Package map and future work
 
-Implemented packages include `job`, `payload`, `serialization`, `persistence`, `queue`, `worker`, `executor`, and `retry`. Future package responsibilities are CLI (Phase 7), scheduling and priority (Phase 8), metrics and API (Phase 9), and deployment/configuration hardening (Phase 10). See [project structure](project-structure.md) and [job lifecycle](job-lifecycle.md).
+Implemented packages include `job`, `payload`, `serialization`, `persistence`, `queue`, `worker`, `executor`, `retry`, and `cli`. The CLI is an application/interface layer over the established domain and infrastructure abstractions; it does not replace them. Future package responsibilities are scheduling and priority (Phase 8), metrics and API (Phase 9), and deployment/configuration hardening (Phase 10). See [project structure](project-structure.md), [job lifecycle](job-lifecycle.md), and the [Phase 7 CLI guide](../versions/v7-cli/README.md).

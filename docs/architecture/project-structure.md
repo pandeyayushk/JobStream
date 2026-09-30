@@ -21,7 +21,7 @@ JobStream/
 │   │   ├── worker/           # Worker model, registration, lifecycle, heartbeat
 │   │   ├── executor/         # Job executor interface, factory, and implementations
 │   │   ├── retry/            # Retry policy, backoff calculation, and dead-letter queue
-│   │   ├── cli/              # Command-line interface
+│   │   ├── cli/              # Picocli command-line interface
 │   │   ├── schedule/         # Delayed/scheduled job support
 │   │   ├── priority/         # Priority queue support
 │   │   ├── metrics/          # Statistics, counters, and observability
@@ -150,8 +150,9 @@ The core domain (`job`, `payload`) represents pure business concepts. It must re
 - **`io.github.pandeyayushk.jobstream.cli`**
   - **Responsibility:** Command-line operational tool for operators.
   - **Phase Introduced:** Phase 7
-  - **Planned Types:** `JobStreamCli`, command subpackages
-  - **Allowed Dependencies:** `job`, `payload`, `queue`, `persistence`, `worker`, `retry`, `config`
+  - **Status:** Implemented in Phase 7
+  - **Implemented Types:** `JobStreamCli`, `CliContext`, command classes, exception handlers, `TableFormatter`
+  - **Allowed Dependencies:** `job`, `payload`, `queue`, `persistence`, `worker`, `retry`
 
 - **`io.github.pandeyayushk.jobstream.schedule`**
   - **Responsibility:** Time-delayed execution and scheduled job migration poller.
@@ -191,6 +192,6 @@ The core domain (`job`, `payload`) represents pure business concepts. It must re
 2. **Mirroring in Tests:** Test packages in `src/test/java` must mirror production packages in `src/main/java` exactly.
 3. **No Premature Directory Creation:** Directories must not be created in `src/` until the phase introducing that package is actively implemented.
 
-## Current State (Phase 6)
+## Current State (Phase 7)
 
-Phases 1 through 6 are complete. The `job`, `payload`, `serialization`, `persistence`, `queue`, `worker`, `executor`, and `retry` packages are implemented. Phase 6 adds persisted retry state, policy-based retry decisions, Worker scheduled retry execution, and Redis DLQ operations. Phases 7-10 remain planned; directories shown for those phases describe intended organization, not implemented features.
+Phases 1 through 7 are complete. The `job`, `payload`, `serialization`, `persistence`, `queue`, `worker`, `executor`, `retry`, and `cli` packages are implemented. Phase 7 adds a Picocli operator interface over existing domain and application abstractions. Scheduling/priority (Phase 8), metrics/API (Phase 9), and deployment/hardening (Phase 10) remain planned; those directories describe intended organization, not implemented features.
