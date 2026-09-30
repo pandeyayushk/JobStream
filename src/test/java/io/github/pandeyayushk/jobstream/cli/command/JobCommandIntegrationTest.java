@@ -9,7 +9,6 @@ import io.github.pandeyayushk.jobstream.serialization.JacksonJobSerializer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import picocli.CommandLine;
 import redis.clients.jedis.RedisClient;
 
 import java.io.ByteArrayOutputStream;
@@ -72,7 +71,7 @@ class JobCommandIntegrationTest {
     void submitsJobSuccessfully() {
         JobStreamCli cli = new JobStreamCli();
 
-        int exitCode = new CommandLine(cli).execute(
+        int exitCode = JobStreamCli.createCommandLine(cli).execute(
                 "job",
                 "submit",
                 "--type", "email:send",
@@ -110,7 +109,7 @@ class JobCommandIntegrationTest {
     void submitsJobToSpecifiedQueue() {
         JobStreamCli cli = new JobStreamCli();
 
-        int exitCode = new CommandLine(cli).execute(
+        int exitCode = JobStreamCli.createCommandLine(cli).execute(
                 "job",
                 "submit",
                 "--type", "email:send",
@@ -135,7 +134,7 @@ class JobCommandIntegrationTest {
     void statusDisplaysStoredJob() {
         JobStreamCli cli = new JobStreamCli();
 
-        int submitExitCode = new CommandLine(cli).execute(
+        int submitExitCode = JobStreamCli.createCommandLine(cli).execute(
                 "job",
                 "submit",
                 "--type", "email:send",
@@ -150,7 +149,7 @@ class JobCommandIntegrationTest {
         output.reset();
         errorOutput.reset();
 
-        int statusExitCode = new CommandLine(cli).execute(
+        int statusExitCode = JobStreamCli.createCommandLine(cli).execute(
                 "job",
                 "status",
                 jobId
@@ -173,7 +172,7 @@ class JobCommandIntegrationTest {
     void rejectsInvalidJsonPayload() {
         JobStreamCli cli = new JobStreamCli();
 
-        int exitCode = new CommandLine(cli).execute(
+        int exitCode = JobStreamCli.createCommandLine(cli).execute(
                 "job",
                 "submit",
                 "--type", "email:send",
@@ -197,7 +196,7 @@ class JobCommandIntegrationTest {
     void rejectsMissingJobType() {
         JobStreamCli cli = new JobStreamCli();
 
-        int exitCode = new CommandLine(cli).execute(
+        int exitCode = JobStreamCli.createCommandLine(cli).execute(
                 "job",
                 "submit",
                 "--payload", "{\"to\":\"dev@example.com\"}"
@@ -212,7 +211,7 @@ class JobCommandIntegrationTest {
     void rejectsMissingPayload() {
         JobStreamCli cli = new JobStreamCli();
 
-        int exitCode = new CommandLine(cli).execute(
+        int exitCode = JobStreamCli.createCommandLine(cli).execute(
                 "job",
                 "submit",
                 "--type", "email:send"
@@ -230,7 +229,7 @@ class JobCommandIntegrationTest {
         String unknownJobId =
                 "00000000-0000-0000-0000-000000000001";
 
-        int exitCode = new CommandLine(cli).execute(
+        int exitCode = JobStreamCli.createCommandLine(cli).execute(
                 "job",
                 "status",
                 unknownJobId
@@ -253,7 +252,7 @@ class JobCommandIntegrationTest {
     void rejectsInvalidJobId() {
         JobStreamCli cli = new JobStreamCli();
 
-        int exitCode = new CommandLine(cli).execute(
+        int exitCode = JobStreamCli.createCommandLine(cli).execute(
                 "job",
                 "status",
                 "not-a-valid-job-id"

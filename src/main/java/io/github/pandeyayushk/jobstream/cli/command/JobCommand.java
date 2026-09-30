@@ -18,6 +18,7 @@ import java.util.concurrent.Callable;
 @Command(
         name = "job",
         description = "Manage JobStream jobs.",
+        mixinStandardHelpOptions = true,
         subcommands = {
                 JobCommand.SubmitCommand.class,
                 JobCommand.StatusCommand.class
@@ -41,7 +42,8 @@ public final class JobCommand implements Runnable {
 
     @Command(
             name = "submit",
-            description = "Submit a new job."
+            description = "Submit a new job.",
+            mixinStandardHelpOptions = true
     )
     public static final class SubmitCommand
             implements Callable<Integer> {
@@ -107,7 +109,8 @@ public final class JobCommand implements Runnable {
 
     @Command(
             name = "status",
-            description = "Show the status of a job."
+            description = "Show the status of a job.",
+            mixinStandardHelpOptions = true
     )
     public static final class StatusCommand
             implements Callable<Integer> {
