@@ -14,8 +14,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import redis.clients.jedis.RedisClient;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -30,6 +33,7 @@ class DlqCommandIntegrationTest {
 
     private PrintStream originalOut;
     private PrintStream originalErr;
+    private InputStream originalIn;
     private ByteArrayOutputStream output;
     private ByteArrayOutputStream errorOutput;
 
@@ -44,6 +48,7 @@ class DlqCommandIntegrationTest {
 
         originalOut = System.out;
         originalErr = System.err;
+        originalIn = System.in;
         output = new ByteArrayOutputStream();
         errorOutput = new ByteArrayOutputStream();
         System.setOut(new PrintStream(output));
@@ -54,6 +59,7 @@ class DlqCommandIntegrationTest {
     void tearDown() {
         System.setOut(originalOut);
         System.setErr(originalErr);
+        System.setIn(originalIn);
         client.flushDB();
         client.close();
     }

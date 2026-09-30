@@ -27,7 +27,41 @@ class CliExecutionExceptionHandlerTest {
         );
 
         assertTrue(message.startsWith("Unable to connect to Redis"));
-        assertTrue(message.contains("Failed to get queue size"));
+        assertTrue(message.contains("Connection refused"));
+        org.junit.jupiter.api.Assertions.assertFalse(message.contains("Failed to get queue size"));
+    }
+
+    @Test
+    void mapsNestedPersistenceExceptionToUnderlyingRedisMessage() {
+        String message = CliExecutionExceptionHandler.userMessage(
+                new io.github.pandeyayushk.jobstream.persistence.PersistenceException(
+                        "Redis Exception",
+                        new JedisConnectionException("Connection timed out")
+                )
+        );
+
+        assertEquals("Unable to connect to Redis: Connection timed out", message);
+    }
+
+    @Test
+    void mapsDirectJedisExceptionMessage() {
+        String message = CliExecutionExceptionHandler.userMessage(
+                new JedisConnectionException("Network unreachable")
+        );
+
+        assertEquals("Unable to connect to Redis: Network unreachable", message);
+    }
+
+    @Test
+    void fallsBackToDefaultRedisMessageWhenNoDetail() {
+        String message = CliExecutionExceptionHandler.userMessage(
+                new RuntimeException(
+                        "Outer application error",
+                        new JedisConnectionException("")
+                )
+        );
+
+        assertEquals("Unable to connect to Redis.", message);
     }
 
     @Test

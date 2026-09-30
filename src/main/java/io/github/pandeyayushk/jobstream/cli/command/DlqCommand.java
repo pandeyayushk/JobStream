@@ -11,6 +11,8 @@ import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
 import picocli.CommandLine.ParentCommand;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -172,6 +174,31 @@ public final class DlqCommand implements Runnable {
         public Integer call() {
             DeadLetterQueue deadLetterQueue = parent.context().deadLetterQueue();
             long size = deadLetterQueue.size();
+            if (size == 0) {
+                System.out.println("Dead letter queue is empty.");
+                return 0;
+            }
+
+            System.out.print(
+                    "Are you sure you want to purge " + size + " job(s) from the dead letter queue? (y/N): "
+            );
+            System.out.flush();
+
+            String response;
+            try {
+                BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
+                response = reader.readLine();
+            } catch (Exception e) {
+                System.out.println();
+                System.out.println("Purge cancelled.");
+                return 0;
+            }
+
+            if (response == null || (!response.trim().equalsIgnoreCase("y") && !response.trim().equalsIgnoreCase("yes"))) {
+                System.out.println("Purge cancelled.");
+                return 0;
+            }
+
             deadLetterQueue.purge();
 
             System.out.println(

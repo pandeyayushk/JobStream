@@ -18,8 +18,9 @@ final class CliExecutionExceptionHandler implements IExecutionExceptionHandler {
     }
 
     static String userMessage(Throwable throwable) {
-        if (isRedisFailure(throwable)) {
-            String detail = firstMessage(throwable);
+        JedisException redisFailure = findRedisFailure(throwable);
+        if (redisFailure != null) {
+            String detail = firstMessage(redisFailure);
             if (detail == null || detail.isBlank()) {
                 return "Unable to connect to Redis.";
             }
@@ -33,15 +34,16 @@ final class CliExecutionExceptionHandler implements IExecutionExceptionHandler {
         return message;
     }
 
-    private static boolean isRedisFailure(Throwable throwable) {
+    private static JedisException findRedisFailure(Throwable throwable) {
         Throwable current = throwable;
+        JedisException deepest = null;
         while (current != null) {
-            if (current instanceof JedisException) {
-                return true;
+            if (current instanceof JedisException jedisException) {
+                deepest = jedisException;
             }
             current = current.getCause();
         }
-        return false;
+        return deepest;
     }
 
     private static String firstMessage(Throwable throwable) {
