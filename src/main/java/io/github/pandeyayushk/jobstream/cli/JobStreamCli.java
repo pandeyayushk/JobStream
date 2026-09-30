@@ -1,6 +1,9 @@
 package io.github.pandeyayushk.jobstream.cli;
 
+import io.github.pandeyayushk.jobstream.cli.command.DlqCommand;
 import io.github.pandeyayushk.jobstream.cli.command.JobCommand;
+import io.github.pandeyayushk.jobstream.cli.command.QueueCommand;
+import io.github.pandeyayushk.jobstream.cli.command.WorkerCommand;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
@@ -13,7 +16,10 @@ import java.util.concurrent.Callable;
         mixinStandardHelpOptions = true,
         version = "JobStream 1.0-SNAPSHOT",
         subcommands = {
-                JobCommand.class
+                JobCommand.class,
+                QueueCommand.class,
+                WorkerCommand.class,
+                DlqCommand.class
         }
 )
 public final class JobStreamCli implements Callable<Integer> {
@@ -55,20 +61,29 @@ public final class JobStreamCli implements Callable<Integer> {
         return context;
     }
 
+    public static CommandLine createCommandLine(JobStreamCli cli) {
+        CommandLine commandLine = new CommandLine(cli);
+        commandLine.setExecutionExceptionHandler(
+                new CliExecutionExceptionHandler()
+        );
+        commandLine.setParameterExceptionHandler(
+                new CliParameterExceptionHandler()
+        );
+        return commandLine;
+    }
+
     public static void main(String[] args) {
         JobStreamCli cli = new JobStreamCli();
 
         try {
-            int exitCode =
-                    new CommandLine(cli).execute(args);
-
+            int exitCode = createCommandLine(cli).execute(args);
             System.exit(exitCode);
         } finally {
             cli.close();
         }
     }
 
-    private void close() {
+    public void close() {
         if (context != null) {
             context.close();
         }
