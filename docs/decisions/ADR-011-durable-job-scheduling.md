@@ -1,6 +1,6 @@
 # ADR-011: Durable Redis Job Scheduling
 
-- **Status:** Accepted; implemented in Phase 8, Step 3
+- **Status:** Accepted; implemented in Phase 8, Steps 3–4
 - **Date:** 2026-11-22
 
 ## Context
@@ -19,6 +19,8 @@ Scores are limited to epoch-millisecond values exactly representable as Redis do
 
 Relative delays use an injected `Clock` (system UTC by default), reject negative durations, and calculate the due Instant before invoking the same atomic scheduling path. Zero delay is allowed.
 
+`RedisSchedulerPoller.pollOnce(batchSize)` selects at most the requested number of due IDs using an injected Clock. Each ID is released by one Lua script that validates its due entry, destination, authoritative serialized Job snapshot and Redis key types, then performs the revisioned `QUEUED` update, status-index change, schedule cleanup, and priority-queue insertion atomically. Queue insertion calls the same Lua helper used by normal submissions, preserving Stream-ID FIFO tie-breaking and the JobId membership hash. Competing pollers are serialized by Redis; a poller whose snapshot loses the race rereads and retries. Missing Jobs and Jobs that are no longer schedulable are removed from scheduler indexes; malformed records and missing destinations remain indexed for repair rather than being discarded. A failed release leaves the schedule and authoritative Job unchanged. Batch work is atomic per Job, so already released jobs remain committed if a later candidate fails.
+
 ## Consequences
 
 - The due timestamp and destination survive application restarts.
@@ -27,6 +29,7 @@ Relative delays use an injected `Clock` (system UTC by default), reject negative
 - Scheduling does not modify Job status; pending jobs remain `PENDING` and retry jobs remain `RETRYING` until a future poller handles them.
 - A failed compare-and-set does not partially update the Job or scheduler indexes; key types are validated before mutation in the script.
 - Scheduler storage holds JobId references only, while the Job record retains payload, priority, retry metadata, and the full timestamp.
+- A bounded poller releases due `PENDING` and `RETRYING` Jobs to the configured priority queue; it does not execute them.
 - Scheduling permits only `PENDING` and `RETRYING` states; queued, processing, and terminal Jobs are rejected.
 
 ## Alternatives Considered

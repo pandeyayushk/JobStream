@@ -12,14 +12,19 @@ Defines requirements for delaying job execution until a future time and for exec
 - Default priority must be defined for jobs without explicit priority.
 
 ## Non-Functional Requirements
-- Efficient polling or pushing of delayed jobs into the ready queue.
+- A bounded scheduler poll must release due jobs into their configured ready queues.
+- Polling must preserve job priority and equal-priority FIFO ordering.
+- Releasing a scheduled job, updating its status and revision, clearing scheduler indexes, and inserting queue membership must be atomic.
+- Missing jobs and jobs that have left `PENDING` or `RETRYING` are cleaned from scheduler indexes; malformed jobs or invalid destinations remain scheduled for recovery.
+- Polling uses an injectable clock for deterministic due-time decisions.
 
 ## Constraints
 - Redis sorted sets are suitable for both scheduling and priority.
 - Scheduling precision is best-effort (not real-time guarantees).
 
 ## Design Questions
-- Deferred: Exact priority levels and scheduling implementation.
+- Job scheduling data is indexed by ID and destination, while the repository Job record remains authoritative.
+- Scheduler releases are performed in bounded batches; polling never executes jobs.
 
 ## Dependencies
 - Queue Semantics (Phase 3)
