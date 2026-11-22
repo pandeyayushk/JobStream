@@ -63,7 +63,7 @@ public class RedisJobSubmissionStore implements JobSubmissionStore {
     }
 
     @Override
-    public void submit(Job originalJob, Job queuedJob, String queueName) {
+    public Job submit(Job originalJob, Job queuedJob, String queueName) {
         Objects.requireNonNull(originalJob, "Original job cannot be null");
         Objects.requireNonNull(queuedJob, "Queued job cannot be null");
         if (queueName == null || queueName.isBlank()) {
@@ -78,7 +78,8 @@ public class RedisJobSubmissionStore implements JobSubmissionStore {
         } catch (ArithmeticException e) {
             throw new QueueException("Job revision exhausted", e);
         }
-        String json = serializer.serialize(queuedJob.withRevision(nextRevision));
+        Job persistedQueuedJob = queuedJob.withRevision(nextRevision);
+        String json = serializer.serialize(persistedQueuedJob);
 
         try {
             RedisPriorityQueueStore.migrateLegacyQueue(client, queueName);
@@ -108,6 +109,7 @@ public class RedisJobSubmissionStore implements JobSubmissionStore {
             if (status != 1) {
                 throw new QueueException("Incompatible Redis key types while submitting " + queuedJob.id());
             }
+            return persistedQueuedJob;
         } catch (JedisException e) {
             throw new QueueException("Failed to atomically submit job", e);
         }

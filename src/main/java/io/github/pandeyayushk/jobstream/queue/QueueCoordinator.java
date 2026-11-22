@@ -4,5 +4,5 @@ import io.github.pandeyayushk.jobstream.job.Job;
 
 public interface QueueCoordinator {
 
-    void submit(Job job, String queueName);
+    Job submit(Job job, String queueName);
 }

@@ -8,6 +8,8 @@ import io.github.pandeyayushk.jobstream.serialization.JacksonJobSerializer;
 import org.junit.jupiter.api.Test;
 import redis.clients.jedis.RedisClient;
 
+import java.time.Instant;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -87,6 +89,62 @@ public class RedisJobSubmissionStoreTest {
                 RedisPriorityQueueStore.membersKey(queueName)
         );
         client.srem("jobstream:status:PENDING", original.id().toString());
+        client.close();
+    }
+
+    @Test
+    public void submissionReturnsCommittedSnapshotWithRevisionAndJobFields() {
+        RedisClient client = RedisClient.create("redis://localhost:6379");
+        JacksonJobSerializer serializer = new JacksonJobSerializer();
+        RedisJobRepository repository = new RedisJobRepository(client, serializer);
+        String queueName = "submission-result-" + UUID.randomUUID();
+        Instant scheduledAt = Instant.parse("2027-03-04T05:06:07.123456789Z");
+
+        Job retrying = Job.create("email", Payload.of(Map.of("recipient", "a@example.com")))
+                .withPriority(14)
+                .withScheduledAt(scheduledAt)
+                .withMetadata("tenant", "acme")
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED)
+                .withRetryAttempt("temporary failure");
+        Job original = repository.save(retrying);
+        QueueCoordinator coordinator = new QueueCoordinatorImp(
+                new RedisJobSubmissionStore(client, serializer)
+        );
+
+        Job persisted = coordinator.submit(original, queueName);
+
+        assertEquals(JobStatus.QUEUED, persisted.status());
+        assertEquals(original.revision() + 1, persisted.revision());
+        assertEquals(14, persisted.priority());
+        assertEquals(scheduledAt, persisted.scheduledAt().orElseThrow());
+        assertEquals(original.retryCount(), persisted.retryCount());
+        assertEquals(original.lastErrorReason(), persisted.lastErrorReason());
+        assertEquals("acme", persisted.metadata().get("tenant"));
+        assertEquals("a@example.com", persisted.payload().asMap().get("recipient"));
+        assertEquals(
+                serializer.serialize(persisted),
+                client.get("jobstream:job:" + original.id())
+        );
+
+        assertEquals(JobStatus.RETRYING, original.status());
+        assertEquals(1, original.revision());
+        assertFalse(original.metadata().containsKey("after-submit"));
+
+        Job savedAgain = repository.save(persisted.withMetadata("after-submit", "yes"));
+        assertEquals(persisted.revision() + 1, savedAgain.revision());
+        assertEquals("yes", savedAgain.metadata().get("after-submit"));
+        assertEquals(1, new RedisJobQueue(client).size(queueName));
+
+        client.del(
+                "jobstream:job:" + original.id(),
+                RedisPriorityQueueStore.legacyKey(queueName),
+                RedisPriorityQueueStore.queueKey(queueName),
+                RedisPriorityQueueStore.sequenceKey(queueName),
+                RedisPriorityQueueStore.membersKey(queueName)
+        );
+        client.srem("jobstream:status:QUEUED", original.id().toString());
         client.close();
     }
 
