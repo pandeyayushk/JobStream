@@ -73,6 +73,17 @@ java -cp target/classes io.github.pandeyayushk.jobstream.Main
 
 Expected output: `JobStream starting...`
 
+### Interactive CLI (Windows)
+
+Build the executable JAR and start the interactive shell:
+
+```powershell
+mvn package
+.\js.bat
+```
+
+The shell connects to Redis at `localhost:6379` by default. The one-shot Picocli commands remain available by passing arguments, for example `java -jar target/jobstream-1.0-SNAPSHOT.jar --help`. To run `js.bat` from any directory, add the JobStream project directory to your Windows `PATH`. For the current PowerShell session, use `$env:Path += ";C:\path\to\JobStream"`; replace the example with the actual project directory. For a persistent entry, add that directory under **Environment Variables > Path** in Windows Settings.
+
 ## Documentation
 
 JobStream uses a structured documentation system to guide development:

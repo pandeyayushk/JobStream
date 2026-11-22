@@ -40,6 +40,14 @@ public final class JobStreamCli implements Callable<Integer> {
 
     private CliContext context;
 
+    public JobStreamCli() {
+    }
+
+    JobStreamCli(String host, int port) {
+        this.host = host;
+        this.port = port;
+    }
+
     @Override
     public Integer call() {
         return 0;
@@ -74,6 +82,11 @@ public final class JobStreamCli implements Callable<Integer> {
 
     public static void main(String[] args) {
         JobStreamCli cli = new JobStreamCli();
+
+        if (args.length == 0) {
+            new InteractiveShell(cli).run();
+            return;
+        }
 
         try {
             int exitCode = createCommandLine(cli).execute(args);

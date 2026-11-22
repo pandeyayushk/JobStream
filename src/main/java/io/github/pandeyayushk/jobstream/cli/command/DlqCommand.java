@@ -170,6 +170,12 @@ public final class DlqCommand implements Runnable {
         @ParentCommand
         private DlqCommand parent;
 
+        private BufferedReader confirmationInput;
+
+        public void setConfirmationInput(BufferedReader confirmationInput) {
+            this.confirmationInput = confirmationInput;
+        }
+
         @Override
         public Integer call() {
             DeadLetterQueue deadLetterQueue = parent.context().deadLetterQueue();
@@ -186,7 +192,9 @@ public final class DlqCommand implements Runnable {
 
             String response;
             try {
-                BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
+                BufferedReader reader = confirmationInput != null
+                        ? confirmationInput
+                        : new BufferedReader(new InputStreamReader(System.in));
                 response = reader.readLine();
             } catch (Exception e) {
                 System.out.println();
