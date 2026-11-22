@@ -15,7 +15,8 @@ Defines requirements for delaying job execution until a future time and for exec
 - A bounded scheduler poll must release due jobs into their configured ready queues.
 - Polling must preserve job priority and equal-priority FIFO ordering.
 - Releasing a scheduled job, updating its status and revision, clearing scheduler indexes, and inserting queue membership must be atomic.
-- Missing jobs and jobs that have left `PENDING` or `RETRYING` are cleaned from scheduler indexes; malformed jobs or invalid destinations remain scheduled for recovery.
+- Missing jobs and jobs that have left `PENDING` or `RETRYING` are cleaned from scheduler indexes; malformed jobs or invalid destinations remain scheduled for recovery without monopolizing later poll batches.
+- Candidate selection uses a persistent rotating rank and progresses through the due set across polls, including when deferred entries remain present.
 - Polling uses an injectable clock for deterministic due-time decisions.
 
 ## Constraints

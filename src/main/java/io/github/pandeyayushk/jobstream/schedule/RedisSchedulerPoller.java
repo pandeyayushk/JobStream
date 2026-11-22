@@ -18,10 +18,35 @@ import java.util.Objects;
 /** Atomically releases due Jobs from scheduler indexes into the existing priority queues. */
 public final class RedisSchedulerPoller implements SchedulerPoller {
 
+    public static final String POLL_CURSOR_KEY = "jobstream:schedule:poll-cursor";
     private static final String JOB_KEY_PREFIX = "jobstream:job:";
     private static final String STATUS_KEY_PREFIX = "jobstream:status:";
     private static final int MAX_CAS_ATTEMPTS = 8;
     private static final long MAX_EXACT_REDIS_INTEGER = 1L << 53;
+
+    /* Atomically advances a persistent rank through the currently due sorted-set entries. */
+    private static final String SELECT_CANDIDATES_SCRIPT = """
+            local scheduleType = redis.call('TYPE', KEYS[1]).ok
+            local cursorType = redis.call('TYPE', KEYS[2]).ok
+            if (scheduleType ~= 'none' and scheduleType ~= 'zset') or
+               (cursorType ~= 'none' and cursorType ~= 'string') then return {-1} end
+
+            local dueCount = redis.call('ZCOUNT', KEYS[1], '-inf', ARGV[1])
+            if dueCount == 0 then return {0, 0} end
+            local storedCursor = redis.call('GET', KEYS[2]) or '0'
+            if not string.match(storedCursor, '^%d+$') then return {-1} end
+            local offset = tonumber(storedCursor) % dueCount
+            local candidates = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1],
+                    'LIMIT', offset, ARGV[2])
+            local nextOffset = offset + #candidates
+            if nextOffset >= dueCount then nextOffset = 0 end
+            redis.call('SET', KEYS[2], tostring(nextOffset))
+            local result = {dueCount, #candidates}
+            for _, candidate in ipairs(candidates) do
+                table.insert(result, candidate)
+            end
+            return result
+            """;
 
     /* Return codes: 1 released, 2 cleaned, 0 stale/raced, -1 incompatible type. */
     private static final String RELEASE_SCRIPT = RedisPriorityQueueStore.enqueueFunctionLua() + """
@@ -93,6 +118,7 @@ public final class RedisSchedulerPoller implements SchedulerPoller {
     private final Clock clock;
     private final String scheduledKey;
     private final String targetsKey;
+    private final String cursorKey;
     private final Runnable beforeRelease;
 
     public RedisSchedulerPoller(RedisClient client, JobSerializer serializer) {
@@ -101,7 +127,7 @@ public final class RedisSchedulerPoller implements SchedulerPoller {
 
     public RedisSchedulerPoller(RedisClient client, JobSerializer serializer, Clock clock) {
         this(client, serializer, clock, RedisJobScheduler.SCHEDULED_KEY,
-                RedisJobScheduler.TARGETS_KEY, () -> { });
+                RedisJobScheduler.TARGETS_KEY, POLL_CURSOR_KEY, () -> { });
     }
 
     RedisSchedulerPoller(
@@ -110,6 +136,7 @@ public final class RedisSchedulerPoller implements SchedulerPoller {
             Clock clock,
             String scheduledKey,
             String targetsKey,
+            String cursorKey,
             Runnable beforeRelease
     ) {
         this.client = Objects.requireNonNull(client, "RedisClient cannot be null");
@@ -117,6 +144,7 @@ public final class RedisSchedulerPoller implements SchedulerPoller {
         this.clock = Objects.requireNonNull(clock, "Clock cannot be null");
         this.scheduledKey = Objects.requireNonNull(scheduledKey, "Scheduled key cannot be null");
         this.targetsKey = Objects.requireNonNull(targetsKey, "Targets key cannot be null");
+        this.cursorKey = Objects.requireNonNull(cursorKey, "Cursor key cannot be null");
         this.beforeRelease = Objects.requireNonNull(beforeRelease, "Hook cannot be null");
     }
 
@@ -125,8 +153,7 @@ public final class RedisSchedulerPoller implements SchedulerPoller {
         if (batchSize <= 0) throw new IllegalArgumentException("Batch size must be positive");
         long now = redisMillis(clock.instant());
         try {
-            List<String> due = client.zrangeByScore(scheduledKey, Double.NEGATIVE_INFINITY,
-                    now, 0, batchSize);
+            List<String> due = selectDueCandidates(now, batchSize);
             int released = 0;
             int cleaned = 0;
             int deferred = 0;
@@ -150,6 +177,30 @@ public final class RedisSchedulerPoller implements SchedulerPoller {
         } catch (JedisException e) {
             throw new JobSchedulingException("Redis failure while polling due Jobs", e);
         }
+    }
+
+    private List<String> selectDueCandidates(long now, int batchSize) {
+        Object response = client.eval(SELECT_CANDIDATES_SCRIPT,
+                List.of(scheduledKey, cursorKey),
+                List.of(Long.toString(now), Integer.toString(batchSize)));
+        if (!(response instanceof List<?> values) || values.isEmpty()) {
+            throw new JobSchedulingException("Redis returned an invalid scheduler scan response");
+        }
+        if (((Number) values.get(0)).longValue() < 0) {
+            throw new JobSchedulingException("Scheduler scan keys have incompatible types or cursor data");
+        }
+        if (values.size() < 2) {
+            throw new JobSchedulingException("Redis returned an incomplete scheduler scan response");
+        }
+        int candidateCount = Math.toIntExact(((Number) values.get(1)).longValue());
+        if (candidateCount != values.size() - 2 || candidateCount > batchSize) {
+            throw new JobSchedulingException("Redis returned an invalid scheduler candidate batch");
+        }
+        List<String> candidates = new ArrayList<>(candidateCount);
+        for (int index = 2; index < values.size(); index++) {
+            candidates.add((String) values.get(index));
+        }
+        return candidates;
     }
 
     private Outcome releaseOne(JobId id, String rawId, long now) {

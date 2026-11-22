@@ -37,6 +37,7 @@ class RedisSchedulerPollerIntegrationTest {
     private RedisSchedulerPoller poller;
     private String scheduledKey;
     private String targetsKey;
+    private String cursorKey;
     private String queuePrefix;
     private final List<JobId> ids = new ArrayList<>();
     private final List<String> queueNames = new ArrayList<>();
@@ -51,14 +52,16 @@ class RedisSchedulerPollerIntegrationTest {
         queuePrefix = keyBase + ":queue:";
         scheduledKey = keyBase + ":delayed";
         targetsKey = keyBase + ":targets";
+        cursorKey = keyBase + ":cursor";
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
         scheduler = new RedisJobScheduler(client, serializer, clock, scheduledKey, targetsKey);
-        poller = new RedisSchedulerPoller(client, serializer, clock, scheduledKey, targetsKey, () -> { });
+        poller = new RedisSchedulerPoller(client, serializer, clock, scheduledKey, targetsKey,
+                cursorKey, () -> { });
     }
 
     @AfterEach
     void tearDown() {
-        client.del(scheduledKey, targetsKey);
+        client.del(scheduledKey, targetsKey, cursorKey);
         for (String name : queueNames) {
             client.del(RedisPriorityQueueStore.sequenceKey(name),
                     RedisPriorityQueueStore.queueKey(name), RedisPriorityQueueStore.membersKey(name),
@@ -229,9 +232,9 @@ class RedisSchedulerPollerIntegrationTest {
             }
         };
         RedisSchedulerPoller first = new RedisSchedulerPoller(client, serializer,
-                Clock.fixed(NOW, ZoneOffset.UTC), scheduledKey, targetsKey, barrier);
+                Clock.fixed(NOW, ZoneOffset.UTC), scheduledKey, targetsKey, cursorKey, barrier);
         RedisSchedulerPoller second = new RedisSchedulerPoller(client, serializer,
-                Clock.fixed(NOW, ZoneOffset.UTC), scheduledKey, targetsKey, barrier);
+                Clock.fixed(NOW, ZoneOffset.UTC), scheduledKey, targetsKey, cursorKey, barrier);
         try (var executor = Executors.newFixedThreadPool(2)) {
             Future<SchedulerPollResult> a = executor.submit(() -> first.pollOnce(1));
             Future<SchedulerPollResult> b = executor.submit(() -> second.pollOnce(1));
@@ -248,6 +251,40 @@ class RedisSchedulerPollerIntegrationTest {
     }
 
     @Test
+    void concurrentPollersAdvancePastDeferredCandidateWithoutDuplicateRelease() throws Exception {
+        JobId malformedId = JobId.fromString("00000000-0000-0000-0000-000000000001");
+        ids.add(malformedId);
+        client.set("jobstream:job:" + malformedId, "not-json");
+        client.zadd(scheduledKey, NOW.toEpochMilli(), malformedId.toString());
+        client.hset(targetsKey, malformedId.toString(), queueName("concurrent-bad"));
+        Job valid = persist(jobWithId("00000000-0000-0000-0000-000000000002"));
+        schedule(valid, NOW, "concurrent-progress");
+
+        RedisSchedulerPoller secondPoller = new RedisSchedulerPoller(client, serializer,
+                Clock.fixed(NOW, ZoneOffset.UTC), scheduledKey, targetsKey, cursorKey, () -> { });
+        var start = new CountDownLatch(1);
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            Future<SchedulerPollResult> first = executor.submit(() -> {
+                start.await();
+                return poller.pollOnce(1);
+            });
+            Future<SchedulerPollResult> second = executor.submit(() -> {
+                start.await();
+                return secondPoller.pollOnce(1);
+            });
+            start.countDown();
+            first.get();
+            second.get();
+        }
+
+        assertEquals(JobStatus.QUEUED, stored(valid).status());
+        assertEquals(1, queue.size(queueName("concurrent-progress")));
+        assertEquals(valid.id(), queue.dequeueNonBlocking(queueName("concurrent-progress")).orElseThrow());
+        assertEquals("not-json", client.get("jobstream:job:" + malformedId));
+        assertEquals((double) NOW.toEpochMilli(), client.zscore(scheduledKey, malformedId.toString()));
+    }
+
+    @Test
     void malformedRecordIsDeferredAndSchedulingIndexesRemain() {
         Job job = persist(Job.create("mail", Payload.empty()));
         schedule(job, NOW, "malformed");
@@ -260,9 +297,118 @@ class RedisSchedulerPollerIntegrationTest {
         assertEquals(queueName("malformed"), client.hget(targetsKey, job.id().toString()));
     }
 
+    @Test
+    void malformedCandidateDoesNotStarveLaterDueJobAndCursorSurvivesPollerRestart() {
+        JobId malformedId = JobId.fromString("00000000-0000-0000-0000-000000000001");
+        ids.add(malformedId);
+        Job valid = persist(jobWithId("00000000-0000-0000-0000-000000000002"));
+        client.set("jobstream:job:" + malformedId, "{malformed");
+        client.zadd(scheduledKey, NOW.toEpochMilli(), malformedId.toString());
+        client.hset(targetsKey, malformedId.toString(), queueName("bad-json"));
+        schedule(valid, NOW, "valid-after-malformed");
+
+        poller.pollOnce(1);
+        RedisSchedulerPoller restarted = new RedisSchedulerPoller(client, serializer,
+                Clock.fixed(NOW, ZoneOffset.UTC), scheduledKey, targetsKey, cursorKey, () -> { });
+        for (int i = 0; i < 40 && stored(valid).status() != JobStatus.QUEUED; i++) {
+            restarted.pollOnce(1);
+        }
+
+        assertEquals("{malformed", client.get("jobstream:job:" + malformedId));
+        assertEquals((double) NOW.toEpochMilli(), client.zscore(scheduledKey, malformedId.toString()));
+        assertEquals(JobStatus.QUEUED, stored(valid).status());
+        assertEquals(valid.id(), queue.dequeueNonBlocking(queueName("valid-after-malformed")).orElseThrow());
+    }
+
+    @Test
+    void invalidDestinationDoesNotStarveLaterDueJob() {
+        JobId invalidDestinationId = JobId.fromString("00000000-0000-0000-0000-000000000001");
+        ids.add(invalidDestinationId);
+        Job valid = persist(jobWithId("00000000-0000-0000-0000-000000000002"));
+        client.zadd(scheduledKey, NOW.toEpochMilli(), invalidDestinationId.toString());
+        client.hset(targetsKey, invalidDestinationId.toString(), " ");
+        schedule(valid, NOW, "after-invalid-target");
+
+        poller.pollOnce(1);
+        for (int i = 0; i < 40 && stored(valid).status() != JobStatus.QUEUED; i++) {
+            poller.pollOnce(1);
+        }
+
+        assertEquals(" ", client.hget(targetsKey, invalidDestinationId.toString()));
+        assertEquals((double) NOW.toEpochMilli(), client.zscore(scheduledKey, invalidDestinationId.toString()));
+        assertEquals(JobStatus.QUEUED, stored(valid).status());
+    }
+
+    @Test
+    void jobsAddedAfterScanningBeginsAreReachedByThePersistentRankCursor() {
+        JobId deferredId = JobId.fromString("00000000-0000-0000-0000-000000000001");
+        ids.add(deferredId);
+        client.set("jobstream:job:" + deferredId, "broken");
+        client.zadd(scheduledKey, NOW.toEpochMilli(), deferredId.toString());
+        client.hset(targetsKey, deferredId.toString(), queueName("broken"));
+        Job firstValid = persist(jobWithId("00000000-0000-0000-0000-000000000003"));
+        schedule(firstValid, NOW, "new-arrivals");
+
+        poller.pollOnce(1); // begins a persistent scan before a new item is added
+        Job arriving = persist(jobWithId("00000000-0000-0000-0000-000000000002"));
+        schedule(arriving, NOW, "new-arrivals");
+
+        List<JobId> released = new ArrayList<>();
+        for (int i = 0; i < 40 && released.size() < 2; i++) {
+            poller.pollOnce(1);
+            if (stored(firstValid).status() == JobStatus.QUEUED && !released.contains(firstValid.id())) {
+                released.add(firstValid.id());
+            }
+            if (stored(arriving).status() == JobStatus.QUEUED && !released.contains(arriving.id())) {
+                released.add(arriving.id());
+            }
+        }
+
+        assertTrue(released.contains(firstValid.id()));
+        assertTrue(released.contains(arriving.id()));
+        assertEquals("broken", client.get("jobstream:job:" + deferredId));
+        assertEquals((double) NOW.toEpochMilli(), client.zscore(scheduledKey, deferredId.toString()));
+    }
+
+    @Test
+    void repairedAndRemovedEntriesDoNotPreventProgress() {
+        JobId repairId = JobId.fromString("00000000-0000-0000-0000-000000000001");
+        JobId removedId = JobId.fromString("00000000-0000-0000-0000-000000000002");
+        ids.add(repairId);
+        ids.add(removedId);
+        Job valid = persist(jobWithId("00000000-0000-0000-0000-000000000003"));
+        client.set("jobstream:job:" + repairId, "broken");
+        client.zadd(scheduledKey, NOW.toEpochMilli(), repairId.toString());
+        client.hset(targetsKey, repairId.toString(), queueName("repaired"));
+        client.zadd(scheduledKey, NOW.toEpochMilli(), removedId.toString());
+        client.hset(targetsKey, removedId.toString(), " ");
+        schedule(valid, NOW, "repair-removal-progress");
+
+        poller.pollOnce(1); // examines malformed Job and advances the persistent rank
+        Job repaired = jobWithId(repairId.toString());
+        client.set("jobstream:job:" + repairId, serializer.serialize(repaired));
+        client.sadd("jobstream:status:" + JobStatus.PENDING, repairId.toString());
+        client.zrem(scheduledKey, removedId.toString());
+        client.hdel(targetsKey, removedId.toString());
+
+        for (int i = 0; i < 40 &&
+                (stored(valid).status() != JobStatus.QUEUED || stored(repaired).status() != JobStatus.QUEUED); i++) {
+            poller.pollOnce(1);
+        }
+
+        assertEquals(JobStatus.QUEUED, stored(valid).status());
+        assertEquals(JobStatus.QUEUED, stored(repaired).status());
+        assertNull(client.zscore(scheduledKey, removedId.toString()));
+    }
+
     private Job persist(Job job) {
         ids.add(job.id());
         return repository.save(job);
+    }
+
+    private static Job jobWithId(String value) {
+        return Job.reconstitute(JobId.fromString(value), "mail", JobStatus.PENDING,
+                Payload.empty(), NOW, NOW, Map.of());
     }
 
     private void schedule(Job job, Instant at, String target) {
