@@ -4,6 +4,7 @@ import io.github.pandeyayushk.jobstream.job.Job;
 import io.github.pandeyayushk.jobstream.job.JobStatus;
 import io.github.pandeyayushk.jobstream.payload.Payload;
 import io.github.pandeyayushk.jobstream.persistence.RedisJobRepository;
+import io.github.pandeyayushk.jobstream.queue.RedisJobQueue;
 import io.github.pandeyayushk.jobstream.serialization.JacksonJobSerializer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -350,15 +351,9 @@ class RedisDeadLetterQueueTest {
 
         assertTrue(result.isPresent());
 
-        assertEquals(
-                1,
-                client.llen("jobstream:queue:default")
-        );
-
-        assertEquals(
-                job.id().toString(),
-                client.rpop("jobstream:queue:default")
-        );
+        RedisJobQueue activeQueue = new RedisJobQueue(client);
+        assertEquals(1, activeQueue.size("default"));
+        assertEquals(Optional.of(job.id()), activeQueue.dequeueNonBlocking("default"));
     }
 
 
@@ -389,6 +384,23 @@ class RedisDeadLetterQueueTest {
                 JobStatus.QUEUED,
                 restored.status()
         );
+    }
+
+    @Test
+    void requeuePreservesPriorityInActivePriorityQueue() {
+        Job failed = Job.create("test-job", Payload.empty())
+                .withPriority(17)
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED);
+        repository.save(failed);
+        deadLetterQueue.moveToDeadLetter(failed, "retry manually");
+
+        Job requeued = deadLetterQueue.requeue(failed.id(), "default").orElseThrow();
+        RedisJobQueue activeQueue = new RedisJobQueue(client);
+
+        assertEquals(17, requeued.priority());
+        assertEquals(Optional.of(failed.id()), activeQueue.dequeueNonBlocking("default"));
     }
 
 

@@ -52,7 +52,7 @@ public class RedisJobSubmissionStoreTest {
                 )
         );
 
-        assertEquals(1, client.llen("jobstream:queue:" + queueName));
+        assertEquals(1, new RedisJobQueue(client).size(queueName));
 
         assertEquals(
                 Optional.of(originalJob.id()),
@@ -137,15 +137,9 @@ public class RedisJobSubmissionStoreTest {
 
         store.submit(originalJob, queuedJob, queueName);
 
-        assertEquals(
-                1,
-                client.llen("jobstream:queue:" + queueName)
-        );
-
-        assertEquals(
-                originalJob.id().toString(),
-                client.rpop("jobstream:queue:" + queueName)
-        );
+        RedisJobQueue queue = new RedisJobQueue(client);
+        assertEquals(1, queue.size(queueName));
+        assertEquals(Optional.of(originalJob.id()), queue.dequeueNonBlocking(queueName));
     }
 
     @Test

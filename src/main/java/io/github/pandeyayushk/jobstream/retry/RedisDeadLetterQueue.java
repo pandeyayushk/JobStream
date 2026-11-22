@@ -22,6 +22,26 @@ public class RedisDeadLetterQueue implements DeadLetterQueue {
     private static final String STATUS_KEY_PREFIX =
             "jobstream:status:";
 
+    private static final String REQUEUE_SCRIPT = """
+            redis.call('LREM', KEYS[1], 1, ARGV[2])
+            redis.call('SET', KEYS[2], ARGV[1])
+            redis.call('SREM', KEYS[3], ARGV[2])
+            redis.call('SADD', KEYS[4], ARGV[2])
+
+            if redis.call('HEXISTS', KEYS[7], ARGV[2]) == 0 then
+                local streamId = redis.call('XADD', KEYS[5], '*', 'job', ARGV[2])
+                redis.call('XDEL', KEYS[5], streamId)
+                local millis, tick = string.match(streamId, '^(%d+)%-(%d+)$')
+                local function pad(value)
+                    return string.rep('0', 20 - string.len(value)) .. value
+                end
+                local member = pad(millis) .. '-' .. pad(tick) .. ':' .. ARGV[2]
+                redis.call('ZADD', KEYS[6], -tonumber(ARGV[3]), member)
+                redis.call('HSET', KEYS[7], ARGV[2], member)
+            end
+            return 1
+            """;
+
     private final RedisClient client;
     private final JobSerializer serializer;
 
@@ -161,8 +181,6 @@ public class RedisDeadLetterQueue implements DeadLetterQueue {
         String jobKey = JOB_KEY_PREFIX + jobIdValue;
         String deadStatusKey = STATUS_KEY_PREFIX + JobStatus.DEAD;
         String queuedStatusKey = STATUS_KEY_PREFIX + JobStatus.QUEUED;
-        String targetQueueKey = "jobstream:queue:" + targetQueue;
-
         try {
             String json = client.get(jobKey);
 
@@ -179,36 +197,28 @@ public class RedisDeadLetterQueue implements DeadLetterQueue {
             Job requeuedJob = job.resetRetryForRequeue();
             String requeuedJson = serializer.serialize(requeuedJob);
 
-            try (var transaction = client.multi()) {
-
-                transaction.lrem(
-                        DLQ_KEY,
-                        1,
-                        jobIdValue
-                );
-
-                transaction.set(
-                        jobKey,
-                        requeuedJson
-                );
-
-                transaction.srem(
-                        deadStatusKey,
-                        jobIdValue
-                );
-
-                transaction.sadd(
-                        queuedStatusKey,
-                        jobIdValue
-                );
-
-                transaction.lpush(
-                        targetQueueKey,
-                        jobIdValue
-                );
-
-                transaction.exec();
-            }
+            io.github.pandeyayushk.jobstream.queue.RedisPriorityQueueStore
+                    .migrateLegacyQueue(client, targetQueue);
+            client.eval(
+                    REQUEUE_SCRIPT,
+                    List.of(
+                            DLQ_KEY,
+                            jobKey,
+                            deadStatusKey,
+                            queuedStatusKey,
+                            io.github.pandeyayushk.jobstream.queue.RedisPriorityQueueStore
+                                    .sequenceKey(targetQueue),
+                            io.github.pandeyayushk.jobstream.queue.RedisPriorityQueueStore
+                                    .queueKey(targetQueue),
+                            io.github.pandeyayushk.jobstream.queue.RedisPriorityQueueStore
+                                    .membersKey(targetQueue)
+                    ),
+                    List.of(
+                            requeuedJson,
+                            jobIdValue,
+                            Integer.toString(requeuedJob.priority())
+                    )
+            );
 
             return Optional.of(requeuedJob);
 

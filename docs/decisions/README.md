@@ -33,6 +33,7 @@ Each ADR should follow this structure:
 - [ADR-007: Executor System](ADR-007-executor-system.md)
 - [ADR-008: Retry, Failure Handling, and Dead-Letter Queue](ADR-008-retry-and-failure.md) — Accepted; implemented in Phase 6
 - [ADR-009: Picocli CLI Framework](ADR-009-cli-framework.md) — Accepted; implemented in Phase 7
+- [ADR-010: Numeric Priority Queue Ordering](ADR-010-numeric-priority-queue.md) — Accepted; implemented in Phase 8, Step 2
 
 ## Rule of Thumb
 Trivial decisions don't need ADRs. ADRs are for decisions that affect system architecture, are hard to reverse, or have significant trade-offs.
