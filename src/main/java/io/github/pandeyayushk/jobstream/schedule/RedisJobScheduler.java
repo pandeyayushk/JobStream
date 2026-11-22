@@ -43,6 +43,7 @@ public final class RedisJobScheduler implements JobScheduler {
     private final Clock clock;
     private final String scheduledKey;
     private final String targetsKey;
+    private final Runnable beforeCompareAndSet;
 
     public RedisJobScheduler(RedisClient client, JobSerializer serializer) {
         this(client, serializer, Clock.systemUTC());
@@ -59,11 +60,23 @@ public final class RedisJobScheduler implements JobScheduler {
             String scheduledKey,
             String targetsKey
     ) {
+        this(client, serializer, clock, scheduledKey, targetsKey, () -> { });
+    }
+
+    RedisJobScheduler(
+            RedisClient client,
+            JobSerializer serializer,
+            Clock clock,
+            String scheduledKey,
+            String targetsKey,
+            Runnable beforeCompareAndSet
+    ) {
         this.client = Objects.requireNonNull(client, "RedisClient cannot be null");
         this.serializer = Objects.requireNonNull(serializer, "JobSerializer cannot be null");
         this.clock = Objects.requireNonNull(clock, "Clock cannot be null");
         this.scheduledKey = Objects.requireNonNull(scheduledKey, "Scheduled key cannot be null");
         this.targetsKey = Objects.requireNonNull(targetsKey, "Targets key cannot be null");
+        this.beforeCompareAndSet = Objects.requireNonNull(beforeCompareAndSet, "Hook cannot be null");
     }
 
     @Override
@@ -82,7 +95,16 @@ public final class RedisJobScheduler implements JobScheduler {
 
                 Job current = serializer.deserialize(currentJson);
                 validateSchedulable(current);
-                String scheduledJson = serializer.serialize(current.withScheduledAt(executeAt));
+                long nextRevision;
+                try {
+                    nextRevision = Math.addExact(current.revision(), 1);
+                } catch (ArithmeticException e) {
+                    throw new JobSchedulingException("Job revision exhausted for " + jobId, e);
+                }
+                String scheduledJson = serializer.serialize(
+                        current.withScheduledAt(executeAt).withRevision(nextRevision)
+                );
+                beforeCompareAndSet.run();
                 Object result = client.eval(
                         SCHEDULE_SCRIPT,
                         List.of(jobKey, scheduledKey, targetsKey),

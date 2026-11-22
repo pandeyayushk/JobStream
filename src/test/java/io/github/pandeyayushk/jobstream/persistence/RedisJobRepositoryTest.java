@@ -149,11 +149,11 @@ public class RedisJobRepositoryTest {
                 Payload.of(Map.of("email", "test@example.com"))
         );
 
-        repository.save(job);
+        Job persistedJob = repository.save(job);
 
-        Job queuedJob = job.withStatus(JobStatus.QUEUED);
+        Job queuedJob = persistedJob.withStatus(JobStatus.QUEUED);
 
-        repository.save(queuedJob);
+        queuedJob = repository.save(queuedJob);
 
         List<Job> pendingJobs =
                 repository.findByStatus(JobStatus.PENDING);
@@ -172,6 +172,7 @@ public class RedisJobRepositoryTest {
                         .anyMatch(savedJob ->
                                 savedJob.id().equals(job.id()))
         );
+        assertEquals(2, queuedJob.revision());
 
         repository.delete(job.id());
     }
@@ -209,5 +210,41 @@ public class RedisJobRepositoryTest {
                         .noneMatch(savedJob ->
                                 savedJob.id().equals(job.id()))
         );
+    }
+
+    @Test
+    public void staleSnapshotCannotOverwriteNewerJobRevision() {
+        RedisClient client = RedisClient.create("redis://localhost:6379");
+        JacksonJobSerializer serializer = new JacksonJobSerializer();
+        RedisJobRepository repository = new RedisJobRepository(client, serializer);
+        Job saved = repository.save(Job.create("Email", Payload.empty()));
+        Job stale = saved.withMetadata("stale", "value");
+        Job current = repository.save(saved.withMetadata("current", "value"));
+
+        assertThrows(ConcurrentJobUpdateException.class, () -> repository.save(stale));
+
+        Job restored = repository.findById(saved.id()).orElseThrow();
+        assertEquals(current.revision(), restored.revision());
+        assertEquals("value", restored.metadata().get("current"));
+        assertFalse(restored.metadata().containsKey("stale"));
+        repository.delete(saved.id());
+        client.close();
+    }
+
+    @Test
+    public void payloadRevisionFieldDoesNotConfuseOptimisticVersionCheck() {
+        RedisClient client = RedisClient.create("redis://localhost:6379");
+        JacksonJobSerializer serializer = new JacksonJobSerializer();
+        RedisJobRepository repository = new RedisJobRepository(client, serializer);
+        Job saved = repository.save(
+                Job.create("Email", Payload.of(Map.of("revision", 99)))
+        );
+
+        Job updated = repository.save(saved.withMetadata("updated", "yes"));
+
+        assertEquals(2, updated.revision());
+        assertEquals(99, repository.findById(saved.id()).orElseThrow().payload().asMap().get("revision"));
+        repository.delete(saved.id());
+        client.close();
     }
 }

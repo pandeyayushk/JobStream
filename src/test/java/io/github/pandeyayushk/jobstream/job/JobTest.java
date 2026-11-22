@@ -570,4 +570,26 @@ public class JobTest {
                 job::resetRetryForRequeue
         );
     }
+
+    @Test
+    void lifecycleAndRetryCopiesPreservePersistenceRevision() {
+        Job job = Job.create("test-job", Payload.empty()).withRevision(12);
+        Job queued = job.withStatus(JobStatus.QUEUED);
+        Job processing = queued.withStatus(JobStatus.PROCESSING);
+        Job failed = processing.withStatus(JobStatus.FAILED);
+        Job retrying = failed.withRetryAttempt("temporary failure");
+        Job dead = retrying
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED)
+                .withStatus(JobStatus.DEAD);
+        Job requeued = dead.resetRetryForRequeue();
+
+        assertEquals(12, queued.revision());
+        assertEquals(12, processing.revision());
+        assertEquals(12, failed.revision());
+        assertEquals(12, retrying.revision());
+        assertEquals(12, requeued.revision());
+        assertThrows(IllegalArgumentException.class, () -> job.withRevision(-1));
+    }
 }

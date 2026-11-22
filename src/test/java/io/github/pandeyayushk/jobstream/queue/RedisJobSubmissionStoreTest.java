@@ -61,6 +61,36 @@ public class RedisJobSubmissionStoreTest {
     }
 
     @Test
+    public void staleSubmissionCannotOverwriteNewerPersistedJob() {
+        RedisClient client = RedisClient.create("redis://localhost:6379");
+        JacksonJobSerializer serializer = new JacksonJobSerializer();
+        RedisJobRepository repository = new RedisJobRepository(client, serializer);
+        RedisJobSubmissionStore store = new RedisJobSubmissionStore(client, serializer);
+        String queueName = "submission-stale-" + UUID.randomUUID();
+        Job original = repository.save(Job.create("email", Payload.empty()));
+        repository.save(original.withMetadata("newer", "preserve"));
+
+        assertThrows(
+                QueueException.class,
+                () -> store.submit(original, original.withStatus(JobStatus.QUEUED), queueName)
+        );
+
+        Job restored = repository.findById(original.id()).orElseThrow();
+        assertEquals(JobStatus.PENDING, restored.status());
+        assertEquals("preserve", restored.metadata().get("newer"));
+        assertEquals(0, new RedisJobQueue(client).size(queueName));
+        client.del(
+                "jobstream:job:" + original.id(),
+                RedisPriorityQueueStore.legacyKey(queueName),
+                RedisPriorityQueueStore.queueKey(queueName),
+                RedisPriorityQueueStore.sequenceKey(queueName),
+                RedisPriorityQueueStore.membersKey(queueName)
+        );
+        client.srem("jobstream:status:PENDING", original.id().toString());
+        client.close();
+    }
+
+    @Test
     public void submitMovesDeadJobToQueued() {
         RedisClient client = RedisClient.builder()
                 .hostAndPort("localhost", 6379)

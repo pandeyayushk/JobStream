@@ -58,7 +58,7 @@ class RedisDeadLetterQueueTest {
                 .withStatus(JobStatus.PROCESSING)
                 .withStatus(JobStatus.FAILED);
 
-        repository.save(failed);
+        failed = repository.save(failed);
 
         deadLetterQueue.moveToDeadLetter(
                 failed,
@@ -75,6 +75,26 @@ class RedisDeadLetterQueueTest {
     }
 
     @Test
+    void staleDeadLetterUpdateCannotOverwriteNewerJobRevision() {
+        Job failed = Job.create("test-job", Payload.empty())
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED);
+        Job staleSnapshot = repository.save(failed);
+        repository.save(staleSnapshot.withMetadata("concurrent", "winner"));
+
+        assertThrows(
+                RetryException.class,
+                () -> deadLetterQueue.moveToDeadLetter(staleSnapshot, "failure")
+        );
+
+        Job restored = repository.findById(failed.id()).orElseThrow();
+        assertEquals(JobStatus.FAILED, restored.status());
+        assertEquals("winner", restored.metadata().get("concurrent"));
+        assertEquals(0, deadLetterQueue.size());
+    }
+
+    @Test
     void moveToDeadLetterAddsJobIdToDeadLetterQueue() {
         Job job = Job.create(
                 "test-job",Payload.empty()
@@ -85,7 +105,7 @@ class RedisDeadLetterQueueTest {
                 .withStatus(JobStatus.PROCESSING)
                 .withStatus(JobStatus.FAILED);
 
-        repository.save(failed);
+        failed = repository.save(failed);
 
         deadLetterQueue.moveToDeadLetter(
                 failed,
@@ -109,7 +129,7 @@ class RedisDeadLetterQueueTest {
                 .withStatus(JobStatus.PROCESSING)
                 .withStatus(JobStatus.FAILED);
 
-        repository.save(failed);
+        failed = repository.save(failed);
 
         deadLetterQueue.moveToDeadLetter(
                 failed,
@@ -227,8 +247,8 @@ class RedisDeadLetterQueueTest {
                 .withStatus(JobStatus.PROCESSING)
                 .withStatus(JobStatus.FAILED);
 
-        repository.save(first);
-        repository.save(second);
+        first = repository.save(first);
+        second = repository.save(second);
 
         deadLetterQueue.moveToDeadLetter(first, "first failure");
         deadLetterQueue.moveToDeadLetter(second, "second failure");
@@ -256,9 +276,9 @@ class RedisDeadLetterQueueTest {
                 .withStatus(JobStatus.PROCESSING)
                 .withStatus(JobStatus.FAILED);
 
-        repository.save(first);
-        repository.save(second);
-        repository.save(third);
+        first = repository.save(first);
+        second = repository.save(second);
+        third = repository.save(third);
 
         deadLetterQueue.moveToDeadLetter(first, "first");
         deadLetterQueue.moveToDeadLetter(second, "second");
@@ -276,7 +296,7 @@ class RedisDeadLetterQueueTest {
                 .withStatus(JobStatus.PROCESSING)
                 .withStatus(JobStatus.FAILED);
 
-        repository.save(job);
+        job = repository.save(job);
 
         deadLetterQueue.moveToDeadLetter(
                 job,
@@ -311,7 +331,7 @@ class RedisDeadLetterQueueTest {
                 .withStatus(JobStatus.PROCESSING)
                 .withStatus(JobStatus.FAILED);
 
-        repository.save(job);
+        job = repository.save(job);
 
         deadLetterQueue.moveToDeadLetter(
                 job,
@@ -337,7 +357,7 @@ class RedisDeadLetterQueueTest {
                 .withStatus(JobStatus.PROCESSING)
                 .withStatus(JobStatus.FAILED);
 
-        repository.save(job);
+        job = repository.save(job);
 
         deadLetterQueue.moveToDeadLetter(
                 job,
@@ -364,7 +384,7 @@ class RedisDeadLetterQueueTest {
                 .withStatus(JobStatus.PROCESSING)
                 .withStatus(JobStatus.FAILED);
 
-        repository.save(job);
+        job = repository.save(job);
 
         deadLetterQueue.moveToDeadLetter(
                 job,
@@ -393,7 +413,7 @@ class RedisDeadLetterQueueTest {
                 .withStatus(JobStatus.QUEUED)
                 .withStatus(JobStatus.PROCESSING)
                 .withStatus(JobStatus.FAILED);
-        repository.save(failed);
+        failed = repository.save(failed);
         deadLetterQueue.moveToDeadLetter(failed, "retry manually");
 
         Job requeued = deadLetterQueue.requeue(failed.id(), "default").orElseThrow();
@@ -412,7 +432,7 @@ class RedisDeadLetterQueueTest {
                 .withStatus(JobStatus.FAILED)
                 .withMetadata("failure.type", "test");
 
-        repository.save(job);
+        job = repository.save(job);
 
         deadLetterQueue.moveToDeadLetter(
                 job,
@@ -540,8 +560,8 @@ class RedisDeadLetterQueueTest {
                 .withStatus(JobStatus.PROCESSING)
                 .withStatus(JobStatus.FAILED);
 
-        repository.save(first);
-        repository.save(second);
+        first = repository.save(first);
+        second = repository.save(second);
 
         deadLetterQueue.moveToDeadLetter(first, "first failure");
         deadLetterQueue.moveToDeadLetter(second, "second failure");

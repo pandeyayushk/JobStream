@@ -38,6 +38,7 @@ public class JacksonJobSerializerTest {
         assertEquals(original.metadata(),deserialized.metadata());
         assertEquals(0, deserialized.priority());
         assertEquals(original.scheduledAt(), deserialized.scheduledAt());
+        assertEquals(original.revision(), deserialized.revision());
     }
 
     @Test
@@ -160,12 +161,14 @@ public class JacksonJobSerializerTest {
         Instant scheduledAt = Instant.parse("2027-02-03T04:05:06.123456789Z");
         Job original = Job.create("Email", Payload.empty())
                 .withPriority(-42)
-                .withScheduledAt(scheduledAt);
+                .withScheduledAt(scheduledAt)
+                .withRevision(17);
 
         Job restored = serializer.deserialize(serializer.serialize(original));
 
         assertEquals(-42, restored.priority());
         assertEquals(scheduledAt, restored.scheduledAt().orElseThrow());
+        assertEquals(17, restored.revision());
     }
 
     @Test
@@ -190,5 +193,6 @@ public class JacksonJobSerializerTest {
 
         assertEquals(0, restored.priority());
         assertTrue(restored.scheduledAt().isEmpty());
+        assertEquals(0, restored.revision());
     }
 }

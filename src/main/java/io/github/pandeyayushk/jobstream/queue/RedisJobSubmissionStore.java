@@ -11,21 +11,45 @@ import java.util.Objects;
 public class RedisJobSubmissionStore implements JobSubmissionStore {
 
     private static final String SUBMIT_SCRIPT = """
+            local current = redis.call('GET', KEYS[1])
+            local oldStatus = ARGV[5]
+            if current then
+                local ok, data = pcall(cjson.decode, current)
+                if not ok or type(data) ~= 'table' then return -2 end
+                local revision = string.match(current, '.*"revision"%s*:%s*(%d+)%s*}%s*$') or '0'
+                if revision ~= ARGV[3] then return -1 end
+                oldStatus = data.status
+            elseif ARGV[3] ~= '0' then
+                return -1
+            end
+
+            local oldStatusKey = 'jobstream:status:' .. oldStatus
+            local oldStatusType = redis.call('TYPE', oldStatusKey).ok
+            local newStatusType = redis.call('TYPE', KEYS[2]).ok
+            local sequenceType = redis.call('TYPE', KEYS[3]).ok
+            local queueType = redis.call('TYPE', KEYS[4]).ok
+            local membersType = redis.call('TYPE', KEYS[5]).ok
+            if (oldStatusType ~= 'none' and oldStatusType ~= 'set') or
+               (newStatusType ~= 'none' and newStatusType ~= 'set') or
+               (sequenceType ~= 'none' and sequenceType ~= 'stream') or
+               (queueType ~= 'none' and queueType ~= 'zset') or
+               (membersType ~= 'none' and membersType ~= 'hash') then return -2 end
+
             redis.call('SET', KEYS[1], ARGV[1])
-            redis.call('SREM', KEYS[2], ARGV[2])
-            redis.call('SADD', KEYS[3], ARGV[2])
+            redis.call('SREM', oldStatusKey, ARGV[2])
+            redis.call('SADD', KEYS[2], ARGV[2])
 
             local jobId = ARGV[2]
-            if redis.call('HEXISTS', KEYS[6], jobId) == 0 then
-                local streamId = redis.call('XADD', KEYS[4], '*', 'job', jobId)
-                redis.call('XDEL', KEYS[4], streamId)
+            if redis.call('HEXISTS', KEYS[5], jobId) == 0 then
+                local streamId = redis.call('XADD', KEYS[3], '*', 'job', jobId)
+                redis.call('XDEL', KEYS[3], streamId)
                 local millis, tick = string.match(streamId, '^(%d+)%-(%d+)$')
                 local function pad(value)
                     return string.rep('0', 20 - string.len(value)) .. value
                 end
                 local member = pad(millis) .. '-' .. pad(tick) .. ':' .. jobId
-                redis.call('ZADD', KEYS[5], -tonumber(ARGV[3]), member)
-                redis.call('HSET', KEYS[6], jobId, member)
+                redis.call('ZADD', KEYS[4], -tonumber(ARGV[4]), member)
+                redis.call('HSET', KEYS[5], jobId, member)
             end
             return 1
             """;
@@ -47,17 +71,21 @@ public class RedisJobSubmissionStore implements JobSubmissionStore {
         }
 
         String jobKey = "jobstream:job:" + queuedJob.id();
-        String oldStatusKey = "jobstream:status:" + originalJob.status();
         String queuedStatusKey = "jobstream:status:" + queuedJob.status();
-        String json = serializer.serialize(queuedJob);
+        long nextRevision;
+        try {
+            nextRevision = Math.addExact(originalJob.revision(), 1);
+        } catch (ArithmeticException e) {
+            throw new QueueException("Job revision exhausted", e);
+        }
+        String json = serializer.serialize(queuedJob.withRevision(nextRevision));
 
         try {
             RedisPriorityQueueStore.migrateLegacyQueue(client, queueName);
-            client.eval(
+            Object result = client.eval(
                     SUBMIT_SCRIPT,
                     List.of(
                             jobKey,
-                            oldStatusKey,
                             queuedStatusKey,
                             RedisPriorityQueueStore.sequenceKey(queueName),
                             RedisPriorityQueueStore.queueKey(queueName),
@@ -66,9 +94,20 @@ public class RedisJobSubmissionStore implements JobSubmissionStore {
                     List.of(
                             json,
                             queuedJob.id().toString(),
-                            Integer.toString(queuedJob.priority())
+                            Long.toString(originalJob.revision()),
+                            Integer.toString(queuedJob.priority()),
+                            originalJob.status().name()
                     )
             );
+            // The script checks the revision and all types before mutation.
+            // A conflict must be visible to the caller, never a silent overwrite.
+            long status = ((Number) result).longValue();
+            if (status == -1) {
+                throw new QueueException("Job changed concurrently while submitting " + queuedJob.id());
+            }
+            if (status != 1) {
+                throw new QueueException("Incompatible Redis key types while submitting " + queuedJob.id());
+            }
         } catch (JedisException e) {
             throw new QueueException("Failed to atomically submit job", e);
         }

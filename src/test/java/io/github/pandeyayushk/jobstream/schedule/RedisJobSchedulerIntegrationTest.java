@@ -23,6 +23,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -248,6 +249,53 @@ class RedisJobSchedulerIntegrationTest {
     }
 
     @Test
+    void staleRepositorySaveCannotRemoveSuccessfullyScheduledTimestamp() {
+        Job stored = persist(Job.create("mail", Payload.empty()));
+        Job staleCopy = stored.withMetadata("stale", "must-not-win");
+        Instant executeAt = FIXED_NOW.plusSeconds(12);
+
+        scheduler.schedule(stored.id(), executeAt, "mail");
+
+        assertThrows(
+                io.github.pandeyayushk.jobstream.persistence.ConcurrentJobUpdateException.class,
+                () -> repository.save(staleCopy)
+        );
+
+        Job restored = repository.findById(stored.id()).orElseThrow();
+        assertEquals(executeAt, restored.scheduledAt().orElseThrow());
+        assertFalse(restored.metadata().containsKey("stale"));
+        assertEquals("mail", client.hget(targetsKey, stored.id().toString()));
+    }
+
+    @Test
+    void schedulerRetriesCasWhenRepositoryUpdateWinsBeforeItsAtomicWrite() {
+        Job stored = persist(Job.create("mail", Payload.empty()));
+        Job concurrentUpdate = stored.withMetadata("concurrent", "preserve-me");
+        AtomicBoolean updateOnce = new AtomicBoolean(true);
+        RedisJobScheduler racingScheduler = new RedisJobScheduler(
+                client,
+                serializer,
+                Clock.fixed(FIXED_NOW, ZoneOffset.UTC),
+                scheduledKey,
+                targetsKey,
+                () -> {
+                    if (updateOnce.compareAndSet(true, false)) {
+                        repository.save(concurrentUpdate);
+                    }
+                }
+        );
+        Instant executeAt = FIXED_NOW.plusSeconds(25);
+
+        racingScheduler.schedule(stored.id(), executeAt, "mail-after-update");
+
+        Job restored = repository.findById(stored.id()).orElseThrow();
+        assertEquals("preserve-me", restored.metadata().get("concurrent"));
+        assertEquals(executeAt, restored.scheduledAt().orElseThrow());
+        assertEquals("mail-after-update", client.hget(targetsKey, stored.id().toString()));
+        assertEquals(1, racingScheduler.scheduledCount());
+    }
+
+    @Test
     void validatesNullNegativeAndUnrepresentableTimeAndInvalidQueue() {
         Job job = persist(Job.create("mail", Payload.empty()));
         assertThrows(NullPointerException.class, () -> scheduler.schedule(job.id(), null, "mail"));
@@ -286,7 +334,6 @@ class RedisJobSchedulerIntegrationTest {
 
     private Job persist(Job job) {
         jobIds.add(job.id());
-        repository.save(job);
-        return job;
+        return repository.save(job);
     }
 }

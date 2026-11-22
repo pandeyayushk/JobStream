@@ -22,6 +22,7 @@ public final class Job {
     private final Instant lastFailedAt;
     private final int priority;
     private final Instant scheduledAt;
+    private final long revision;
 
      private Job(JobId id, String type, JobStatus status, Payload payload, Instant createdAt, Instant updatedAt, Map<String, String> metadata) {
          this(
@@ -86,6 +87,29 @@ public final class Job {
             int priority,
             Instant scheduledAt
     ) {
+        this(
+                id, type, status, payload, createdAt, updatedAt, metadata,
+                retryCount, maxRetries, lastErrorReason, lastFailedAt,
+                priority, scheduledAt, 0
+        );
+    }
+
+    private Job(
+            JobId id,
+            String type,
+            JobStatus status,
+            Payload payload,
+            Instant createdAt,
+            Instant updatedAt,
+            Map<String, String> metadata,
+            int retryCount,
+            int maxRetries,
+            String lastErrorReason,
+            Instant lastFailedAt,
+            int priority,
+            Instant scheduledAt,
+            long revision
+    ) {
         if (id == null) {
             throw new NullPointerException("Job Id cannot be null");
         }
@@ -132,6 +156,10 @@ public final class Job {
             );
         }
 
+        if (revision < 0) {
+            throw new IllegalArgumentException("Job revision cannot be negative");
+        }
+
         this.id = id;
         this.type = type;
         this.status = status;
@@ -145,6 +173,7 @@ public final class Job {
         this.lastFailedAt = lastFailedAt;
         this.priority = priority;
         this.scheduledAt = scheduledAt;
+        this.revision = revision;
     }
 
     public static Job create(String type, Payload payload){
@@ -215,6 +244,29 @@ public final class Job {
             int priority,
             Instant scheduledAt
     ) {
+        return reconstitute(
+                id, type, status, payload, createdAt, updatedAt, metadata,
+                retryCount, maxRetries, lastErrorReason, lastFailedAt,
+                priority, scheduledAt, 0
+        );
+    }
+
+    public static Job reconstitute(
+            JobId id,
+            String type,
+            JobStatus status,
+            Payload payload,
+            Instant createdAt,
+            Instant updatedAt,
+            Map<String, String> metadata,
+            int retryCount,
+            int maxRetries,
+            String lastErrorReason,
+            Instant lastFailedAt,
+            int priority,
+            Instant scheduledAt,
+            long revision
+    ) {
         return new Job(
                 id,
                 type,
@@ -228,7 +280,8 @@ public final class Job {
                 lastErrorReason,
                 lastFailedAt,
                 priority,
-                scheduledAt
+                scheduledAt,
+                revision
         );
     }
 
@@ -315,7 +368,8 @@ public final class Job {
                 failureReason,
                 failureTime,
                 priority,
-                scheduledAt
+                scheduledAt,
+                revision
         );
     }
 
@@ -339,7 +393,8 @@ public final class Job {
                 newLastErrorReason,
                 newLastFailedAt,
                 priority,
-                scheduledAt
+                scheduledAt,
+                revision
         );
     }
 
@@ -357,7 +412,8 @@ public final class Job {
                 lastErrorReason,
                 lastFailedAt,
                 newPriority,
-                scheduledAt
+                scheduledAt,
+                revision
         );
     }
 
@@ -379,7 +435,8 @@ public final class Job {
                 lastErrorReason,
                 lastFailedAt,
                 priority,
-                instant
+                instant,
+                revision
         );
     }
 
@@ -408,7 +465,8 @@ public final class Job {
                 lastErrorReason,
                 lastFailedAt,
                 priority,
-                scheduledAt
+                scheduledAt,
+                revision
         );
     }
 
@@ -462,5 +520,17 @@ public final class Job {
 
     public Optional<Instant> scheduledAt() {
         return Optional.ofNullable(scheduledAt);
+    }
+
+    public long revision() {
+        return revision;
+    }
+
+    public Job withRevision(long newRevision) {
+        return new Job(
+                id, type, status, payload, createdAt, updatedAt, metadata,
+                retryCount, maxRetries, lastErrorReason, lastFailedAt,
+                priority, scheduledAt, newRevision
+        );
     }
 }

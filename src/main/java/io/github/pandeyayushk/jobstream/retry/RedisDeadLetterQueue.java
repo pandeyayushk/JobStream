@@ -22,22 +22,69 @@ public class RedisDeadLetterQueue implements DeadLetterQueue {
     private static final String STATUS_KEY_PREFIX =
             "jobstream:status:";
 
-    private static final String REQUEUE_SCRIPT = """
-            redis.call('LREM', KEYS[1], 1, ARGV[2])
-            redis.call('SET', KEYS[2], ARGV[1])
-            redis.call('SREM', KEYS[3], ARGV[2])
-            redis.call('SADD', KEYS[4], ARGV[2])
+    private static final String MOVE_TO_DLQ_SCRIPT = """
+            local current = redis.call('GET', KEYS[1])
+            local oldStatus = ARGV[4]
+            if current then
+                local ok, data = pcall(cjson.decode, current)
+                if not ok or type(data) ~= 'table' or type(data.status) ~= 'string' then return -2 end
+                local revision = string.match(current, '.*"revision"%s*:%s*(%d+)%s*}%s*$') or '0'
+                if revision ~= ARGV[1] then return -1 end
+                oldStatus = data.status
+            elseif ARGV[1] ~= '0' then
+                return -1
+            end
+            local oldStatusKey = 'jobstream:status:' .. oldStatus
+            local oldType = redis.call('TYPE', oldStatusKey).ok
+            local deadType = redis.call('TYPE', KEYS[2]).ok
+            local listType = redis.call('TYPE', KEYS[3]).ok
+            if (oldType ~= 'none' and oldType ~= 'set') or
+               (deadType ~= 'none' and deadType ~= 'set') or
+               (listType ~= 'none' and listType ~= 'list') then return -2 end
+            redis.call('SET', KEYS[1], ARGV[2])
+            redis.call('SREM', oldStatusKey, ARGV[3])
+            redis.call('SADD', KEYS[2], ARGV[3])
+            redis.call('LPUSH', KEYS[3], ARGV[3])
+            return 1
+            """;
 
-            if redis.call('HEXISTS', KEYS[7], ARGV[2]) == 0 then
-                local streamId = redis.call('XADD', KEYS[5], '*', 'job', ARGV[2])
+    private static final String REQUEUE_SCRIPT = """
+            local current = redis.call('GET', KEYS[2])
+            if not current then return -1 end
+            local ok, data = pcall(cjson.decode, current)
+            if not ok or type(data) ~= 'table' then return -2 end
+            local revision = string.match(current, '.*"revision"%s*:%s*(%d+)%s*}%s*$') or '0'
+            if revision ~= ARGV[1] then return -1 end
+            if data.status ~= 'DEAD' then return -1 end
+
+            local listType = redis.call('TYPE', KEYS[1]).ok
+            local deadType = redis.call('TYPE', KEYS[3]).ok
+            local queuedType = redis.call('TYPE', KEYS[4]).ok
+            local sequenceType = redis.call('TYPE', KEYS[5]).ok
+            local queueType = redis.call('TYPE', KEYS[6]).ok
+            local membersType = redis.call('TYPE', KEYS[7]).ok
+            if (listType ~= 'none' and listType ~= 'list') or
+               (deadType ~= 'none' and deadType ~= 'set') or
+               (queuedType ~= 'none' and queuedType ~= 'set') or
+               (sequenceType ~= 'none' and sequenceType ~= 'stream') or
+               (queueType ~= 'none' and queueType ~= 'zset') or
+               (membersType ~= 'none' and membersType ~= 'hash') then return -2 end
+
+            redis.call('LREM', KEYS[1], 1, ARGV[3])
+            redis.call('SET', KEYS[2], ARGV[2])
+            redis.call('SREM', KEYS[3], ARGV[3])
+            redis.call('SADD', KEYS[4], ARGV[3])
+
+            if redis.call('HEXISTS', KEYS[7], ARGV[3]) == 0 then
+                local streamId = redis.call('XADD', KEYS[5], '*', 'job', ARGV[3])
                 redis.call('XDEL', KEYS[5], streamId)
                 local millis, tick = string.match(streamId, '^(%d+)%-(%d+)$')
                 local function pad(value)
                     return string.rep('0', 20 - string.len(value)) .. value
                 end
-                local member = pad(millis) .. '-' .. pad(tick) .. ':' .. ARGV[2]
-                redis.call('ZADD', KEYS[6], -tonumber(ARGV[3]), member)
-                redis.call('HSET', KEYS[7], ARGV[2], member)
+                local member = pad(millis) .. '-' .. pad(tick) .. ':' .. ARGV[3]
+                redis.call('ZADD', KEYS[6], -tonumber(ARGV[4]), member)
+                redis.call('HSET', KEYS[7], ARGV[3], member)
             end
             return 1
             """;
@@ -85,39 +132,36 @@ public class RedisDeadLetterQueue implements DeadLetterQueue {
         Job deadJob = job
                 .withMetadata("failure.reason", reason)
                 .withStatus(JobStatus.DEAD);
-
+        final long nextRevision;
+        try {
+            nextRevision = Math.addExact(job.revision(), 1);
+        } catch (ArithmeticException e) {
+            throw new RetryException("Job revision exhausted", e);
+        }
         String jobKey = JOB_KEY_PREFIX + deadJob.id();
-        String statusKey = STATUS_KEY_PREFIX + JobStatus.DEAD;
-        String oldStatusKey = STATUS_KEY_PREFIX + JobStatus.FAILED;
+        String json = serializer.serialize(deadJob.withRevision(nextRevision));
 
-        String json = serializer.serialize(deadJob);
-
-        try (var transaction = client.multi()) {
-
-            transaction.set(
-                    jobKey,
-                    json
+        try {
+            Object result = client.eval(
+                    MOVE_TO_DLQ_SCRIPT,
+                    List.of(jobKey, STATUS_KEY_PREFIX + JobStatus.DEAD, DLQ_KEY),
+                    List.of(
+                            Long.toString(job.revision()),
+                            json,
+                            deadJob.id().toString(),
+                            job.status().name()
+                    )
             );
-
-            transaction.srem(
-                    oldStatusKey,
-                    deadJob.id().toString()
-            );
-
-            transaction.sadd(
-                    statusKey,
-                    deadJob.id().toString()
-            );
-
-            transaction.lpush(
-                    DLQ_KEY,
-                    deadJob.id().toString()
-            );
-
-            transaction.exec();
-
+            long status = ((Number) result).longValue();
+            if (status != 1) {
+                throw new RetryException(
+                        status == -1
+                                ? "Job changed concurrently while moving to dead letter queue"
+                                : "Incompatible Redis key types while moving job to dead letter queue"
+                );
+            }
         } catch (JedisException e) {
-            throw new RetryException("Failed to move job to dead letter queue",e);
+            throw new RetryException("Failed to move job to dead letter queue", e);
         }
     }
 
@@ -195,11 +239,18 @@ public class RedisDeadLetterQueue implements DeadLetterQueue {
             }
 
             Job requeuedJob = job.resetRetryForRequeue();
-            String requeuedJson = serializer.serialize(requeuedJob);
+            final long nextRevision;
+            try {
+                nextRevision = Math.addExact(job.revision(), 1);
+            } catch (ArithmeticException e) {
+                throw new RetryException("Job revision exhausted", e);
+            }
+            Job persistedRequeuedJob = requeuedJob.withRevision(nextRevision);
+            String requeuedJson = serializer.serialize(persistedRequeuedJob);
 
             io.github.pandeyayushk.jobstream.queue.RedisPriorityQueueStore
                     .migrateLegacyQueue(client, targetQueue);
-            client.eval(
+            Object result = client.eval(
                     REQUEUE_SCRIPT,
                     List.of(
                             DLQ_KEY,
@@ -214,13 +265,23 @@ public class RedisDeadLetterQueue implements DeadLetterQueue {
                                     .membersKey(targetQueue)
                     ),
                     List.of(
+                            Long.toString(job.revision()),
                             requeuedJson,
                             jobIdValue,
                             Integer.toString(requeuedJob.priority())
                     )
             );
 
-            return Optional.of(requeuedJob);
+            long resultCode = ((Number) result).longValue();
+            if (resultCode != 1) {
+                throw new RetryException(
+                        resultCode == -1
+                                ? "Job changed concurrently while requeueing from dead letter queue"
+                                : "Incompatible Redis key types while requeueing job"
+                );
+            }
+
+            return Optional.of(persistedRequeuedJob);
 
         } catch (JedisException e) {
             throw new RetryException(
