@@ -1,6 +1,8 @@
-# ADR-005: Atomic Redis Job Submission with MULTI/EXEC
+# ADR-005: Atomic Redis Job Submission
 
-**Status:** Accepted
+**Status:** Accepted for the Phase 3 implementation; active write mechanics superseded by revision-aware Lua scripts in Phase 8.
+
+> Historical note: The decision below describes the original FIFO List and `MULTI`/`EXEC` implementation. Current submission persists an incremented Job revision and inserts into the priority Sorted Set in one Lua compare-and-set script. See [ADR-010](ADR-010-numeric-priority-queue.md) for active queue representation and [ADR-011](ADR-011-durable-job-scheduling.md) for the revision protocol.
 
 ## Context
 

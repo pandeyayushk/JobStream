@@ -135,7 +135,7 @@ class DlqCommandIntegrationTest {
                 .withStatus(JobStatus.PROCESSING)
                 .withStatus(JobStatus.FAILED);
 
-        repository.save(job);
+        job = repository.save(job);
         deadLetterQueue.moveToDeadLetter(job, "permanent failure");
 
         Job dead = repository.findById(job.id()).orElseThrow();
@@ -329,7 +329,7 @@ class DlqCommandIntegrationTest {
                 .withStatus(JobStatus.QUEUED)
                 .withStatus(JobStatus.PROCESSING)
                 .withStatus(JobStatus.FAILED);
-        repository.save(job);
+        job = repository.save(job);
         deadLetterQueue.moveToDeadLetter(job, reason);
         return repository.findById(job.id()).orElseThrow();
     }

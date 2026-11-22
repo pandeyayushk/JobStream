@@ -8,7 +8,11 @@ import java.util.List;
 import java.util.Optional;
 
 public interface JobRepository {
-    void save(Job job);
+    /**
+     * Persists the supplied revision if it is current, then returns the new persisted snapshot.
+     * A stale snapshot is rejected with {@link ConcurrentJobUpdateException}.
+     */
+    Job save(Job job);
     Optional<Job> findById(JobId id);
     boolean delete(JobId id);
     List<Job> findByStatus(JobStatus status);

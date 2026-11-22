@@ -1,226 +1,87 @@
-# Phase 8 — Scheduling & Priority Queues
+# Phase 8 — Scheduling & Priority Infrastructure
 
-## 1. Objective
+**Status: Infrastructure complete.** This guide records the implementation in the repository. It does not describe the deferred Worker, CLI, or runtime-bootstrap integrations as complete.
 
-Enable time-delayed job execution (jobs scheduled for future execution) and priority-based queueing (ensuring critical jobs are dequeued before lower-priority ones) backed by Redis Sorted Sets (`ZSET`) and multi-tier lists.
+## 1. Implemented scope
 
-## 2. Why This Phase Exists
+Phase 8 adds numeric priority and an optional scheduled timestamp to the immutable `Job`, Redis-backed priority ordering, durable scheduling storage, revision-safe Job updates, and a poller that releases due Jobs into active queues. The authoritative Job remains in `jobstream:job:<jobId>`; the queue and scheduler indexes contain references and routing data, not serialized Job copies.
 
-Standard FIFO queues treat every job equally and process them immediately upon arrival. In production environments:
-- Certain jobs must be deferred (e.g., "send follow-up email in 24 hours", "poll third-party status in 5 minutes").
-- Delayed retries from Phase 6 require non-blocking scheduling rather than thread sleeping, allowing workers to stay productive.
-- Critical operations (e.g., password reset, payment verification) must leapfrog long background batches (e.g., monthly report generation).
+Implemented classes are in the existing `job`, `queue`, `persistence`, `serialization`, and `schedule` packages. There is no `priority` package.
 
-**Depends on:**
-- Phase 1 (Domain Model: `Job`, `JobStatus`)
-- Phase 2 (Persistence: `JobRepository`)
-- Phase 3 (Queue: `JobQueue`)
-- Phase 4 (Worker: `Worker`)
-- Phase 6 (Reliability: `RetryPolicy`)
+## 2. Numeric priority queue
 
-## 3. Scope
+`Job.priority()` is an integer. New Jobs default to priority `0`; any positive or negative integer is accepted, and larger values have higher priority. `RedisJobQueue` implements `JobQueue`; `RedisPriorityQueueStore` in the `queue` package owns its Redis keys and scripts.
 
-**In scope:**
-- Priority support in `Job` (integer priority level, default: 0)
-- `PriorityJobQueue` backed by multi-level Redis lists or Redis Sorted Sets
-- Scheduled / delayed job support: `JobScheduler` interface and Redis `ZSET` implementation storing `JobId` references where score = scheduled execution epoch milliseconds
-- Background `SchedulerPoller` to move mature scheduled `JobId`s into active queues
-- Integrating delayed retries from Phase 6 into `JobScheduler` (non-blocking delay)
-- CLI commands to submit delayed and prioritized jobs
+Each named active queue uses:
 
-**Out of scope:**
-- Recurring cron syntax expressions (deferred to post-MVP / Phase 10)
-- Distributed leader election for scheduler poller (addressed in Phase 10)
+| Redis key | Type | Purpose |
+|---|---|---|
+| `jobstream:priority-queue:<queueName>` | Sorted Set | Active JobId members ordered by priority and FIFO tie-break |
+| `jobstream:priority-sequence:<queueName>` | Stream | Allocates monotonically increasing Redis Stream IDs |
+| `jobstream:priority-members:<queueName>` | Hash | Maps a JobId to its unique current Sorted Set member |
 
-## 4. Prerequisites
+The Sorted Set score is the negative numeric priority. Its member is a fixed-width 20-digit Stream millisecond value, a hyphen, a fixed-width 20-digit Stream sequence value, a colon, and the JobId. Thus Redis's ascending score order puts higher priorities first; lexicographic member order preserves FIFO for equal-priority enqueue operations. Sequence values are not combined with priority in a floating-point score. `XADD *` allocates sequence IDs; the temporary Stream entry is deleted while Redis retains the Stream high-water mark.
 
-- Phase 7 complete (CLI functional) — prerequisite target; Phase 7 is currently planned
-- Redis instance running
-- Understanding of Redis Sorted Sets (`ZSET`) and time-based scoring
+The membership Hash prevents duplicate queue membership. Dequeue removes the first Sorted Set member and its JobId index entry atomically. Normal submission, Worker retry requeue, shutdown requeue, and DLQ requeue use the same priority queue representation and preserve the Job's persisted priority.
 
-## 5. Read Before Starting
+### Legacy queue migration
 
-- `docs/requirements/scheduling-and-priority.md` — Scheduling & Priority requirements
-- `docs/architecture/project-structure.md` — Packages `priority` and `schedule`
-- `docs/architecture/system-overview.md` — Architectural role of scheduling
+The former `jobstream:queue:<queueName>` active queue List is retained as a migration source. The first operation on a named active queue atomically reads the List in its original FIFO dequeue order, obtains each Job's priority from the authoritative Job record (defaulting to zero for missing/legacy priority data), inserts the ID into the priority queue, records membership, and deletes the old List after migration. Duplicate IDs are represented once. The DLQ List `jobstream:queue:dead-letter` is a separate structure and remains a List.
 
-## 6. Concepts to Understand
+## 3. Durable delayed scheduling
 
-- **Redis Sorted Sets (ZSET):** Collection of unique members ordered by a floating-point score.
-  - Commands: `ZADD`, `ZRANGEBYSCORE`, `ZREMRANGEBYSCORE`, `ZPOPMIN`.
-  - Reference: [Redis Sorted Sets](https://redis.io/docs/data-types/sorted-sets/)
-- **Time as Score Pattern:** Storing `JobId` in a ZSET with timestamp (`Instant.toEpochMilli()`) as score.
-  - Querying `ZRANGEBYSCORE jobstream:schedule:delayed 0 currentTime` finds all jobs ready to run.
-- **Priority Modeling in Redis:**
-  - Option A: Single ZSET where score = priority (requires polling or Lua scripts).
-  - Option B: Multi-queue priority (e.g. `queue:high`, `queue:default`, `queue:low`) dequeued via `BRPOP queue:high queue:default queue:low 0`.
+`JobScheduler` exposes `schedule(JobId, Instant, targetQueue)`, `scheduleDelayed(JobId, Duration, targetQueue)`, and `scheduledCount()`. `RedisJobScheduler` stores:
 
-## 7. Design Decisions
+| Redis key | Type | Value |
+|---|---|---|
+| `jobstream:schedule:delayed` | Sorted Set | JobId member; execution epoch-millisecond score |
+| `jobstream:schedule:targets` | Hash | JobId field; destination queue name |
 
-### 7.1 Priority Queue Architecture
+Scheduler indexes contain JobIds and routing data only. The Job record remains authoritative and stores the complete `scheduledAt` Instant, including sub-millisecond precision. The Redis score uses epoch milliseconds and is accepted only when exactly representable as a Redis Sorted Set score: within the epoch-millisecond `long` range and the exact integer range `[-2^53, 2^53]`.
 
-**Decision:** Multi-level priority queues (`high`, `default`, `low`) leveraging Redis `BRPOP multi-key` semantics (`BRPOP queue:high queue:default queue:low 0`).
-- Provides instant, blocking, zero-overhead priority consumption.
-- Preserves O(1) performance without continuous polling loops.
+Only `PENDING` and `RETRYING` Jobs can be scheduled. Scheduling updates `scheduledAt` and the Job revision atomically with the scheduling indexes, but leaves the lifecycle status unchanged while the Job waits. Rescheduling a JobId updates its existing score and destination. Delays must be non-negative; zero delay is allowed. Cron and recurring scheduling are not implemented.
 
-**Record this decision in:** ADR-010 (to be created during this phase).
+## 4. Revision-based concurrency
 
-### 7.2 Scheduled Jobs Migration Mechanism: Reference-Based
+`Job` carries a persisted `long revision`. New Jobs start at revision zero; serialized legacy Jobs with no revision are read as revision zero. Redis Job writers compare the supplied revision with the current stored revision in Lua, reject stale snapshots, increment the revision, and update related indexes in the same script where applicable. Revision comparisons use decimal strings rather than converting the value to a Lua floating-point number.
 
-**Decision:**
-- Delayed jobs store their `JobId` in a Redis Sorted Set: `jobstream:schedule:delayed`.
-  - Member: `jobId` string.
-  - Score: Scheduled execution epoch milliseconds (`executeAt.toEpochMilli()`).
-- A dedicated background daemon (`SchedulerPoller`) queries mature jobs using an atomic Lua script:
-  - Fetches `JobId`s with score $\le \text{now}$.
-  - Removes them from the ZSET (`ZREM`).
-  - Pushes them onto their destination active queue (`LPUSH`).
-  - Updates job status in `JobRepository` to `QUEUED`.
+`RedisJobRepository.save` returns the persisted snapshot with the incremented revision. `RedisJobSubmissionStore.submit` and `QueueCoordinator.submit` return the exact queued snapshot committed by the atomic submission script. Dead-letter requeue also returns its persisted queued snapshot. Scheduler updates compare the complete serialized current Job snapshot and retry against a newer record after a conflict. This prevents an old repository, submission, retry, or DLQ snapshot from silently overwriting a newer `scheduledAt`, priority, retry field, or other Job data.
 
-**Record this decision in:** ADR-010.
+## 5. Scheduler poller
 
-## 8. Requirements
+`SchedulerPoller.pollOnce(batchSize)` performs one bounded pass; it does not run its own daemon or execute Jobs. `RedisSchedulerPoller` accepts an injected `Clock` (system UTC by default), selects due entries whose score is at most the current epoch-millisecond time, and returns a `SchedulerPollResult` with examined, released, cleaned, and deferred counts. `batchSize` must be positive and caps the candidate JobIds returned to Java and the per-Job release attempts in one invocation.
 
-### Functional Requirements
+Candidate progression uses the persistent Redis key `jobstream:schedule:poll-cursor`. A Lua selection script reads the due count, normalizes the stored rank modulo the current count, selects a bounded page with `ZRANGEBYSCORE ... LIMIT`, and advances the cursor atomically. Multiple pollers share the cursor; it survives process restart. Entries added, removed, repaired, or rescheduled can shift ranks, so the next selection normalizes and wraps. With a stable due set, repeated polls visit all candidates, including deferred entries. The per-Job atomic release remains the duplicate-release guard if concurrent changes cause overlap.
 
-1. **Job Model Updates:**
-   - Field `int priority` (default: 0).
-   - Field `Optional<Instant> scheduledAt` (nullable/optional).
-   - Methods: `withPriority(int priority)`, `withScheduledAt(Instant instant)`.
+For each candidate, one release Lua script revalidates the due score, destination, and exact authoritative Job JSON; preflights the relevant Redis key types; changes `PENDING` or `RETRYING` to `QUEUED`; increments revision; updates status indexes; removes the JobId from both scheduler indexes; and inserts it into the destination priority queue and membership Hash. The release operation is atomic per Job, not for the whole batch: successful earlier releases stay committed if a later candidate fails.
 
-2. **`PriorityJobQueue` Interface & Implementation:**
-   - Enqueue jobs specifying priority tier (`HIGH`, `DEFAULT`, `LOW`).
-   - Dequeue automatically prioritizes higher-priority tiers before lower ones.
+Missing Jobs and Jobs that are no longer schedulable are removed from the scheduling Sorted Set and destination Hash. Malformed Job records, invalid JobIds, and missing or blank destinations remain scheduled for repair and are counted as deferred. Redis/type failures are surfaced as failures, not reported as successful deferrals. The batch limits candidate processing; Redis may internally traverse skipped sorted-set ranks for a later offset, so Redis command cost can increase with the due-set size.
 
-3. **`JobScheduler` Interface & `RedisJobScheduler`:**
-   - `void schedule(JobId jobId, Instant executeAt, String targetQueue)`
-   - `void scheduleDelayed(JobId jobId, Duration delay, String targetQueue)`
-   - `long scheduledCount()`
-   - Storage key: `jobstream:schedule:delayed`.
+## 6. Lifecycle and integration boundary
 
-4. **`SchedulerPoller`:**
-   - Periodic background task (using `ScheduledExecutorService`, e.g. every 500ms).
-   - Atomically transfers mature `JobId`s to destination queues.
+Scheduling leaves a `PENDING` Job as `PENDING` and a `RETRYING` Job as `RETRYING`. Poller release performs only these transitions:
 
-5. **Phase 6 Retry Integration:**
-   - When a job fails with a backoff delay, `Worker` invokes `JobScheduler.scheduleDelayed(job.getId(), backoff, targetQueue)`.
-   - The worker thread immediately returns to processing the next job (non-blocking).
-
-### Non-Functional Requirements
-
-- Scheduled job migration must be atomic (no lost jobs on poller crash).
-- Poller overhead on Redis must be negligible when no jobs are pending.
-
-## 9. File Change Manifest
-
-### CREATE
-
-```
-src/main/java/io/github/pandeyayushk/jobstream/priority/Priority.java
-src/main/java/io/github/pandeyayushk/jobstream/priority/PriorityJobQueue.java
-src/main/java/io/github/pandeyayushk/jobstream/priority/RedisPriorityJobQueue.java
-src/main/java/io/github/pandeyayushk/jobstream/schedule/JobScheduler.java
-src/main/java/io/github/pandeyayushk/jobstream/schedule/RedisJobScheduler.java
-src/main/java/io/github/pandeyayushk/jobstream/schedule/SchedulerPoller.java
-src/test/java/io/github/pandeyayushk/jobstream/priority/RedisPriorityJobQueueTest.java
-src/test/java/io/github/pandeyayushk/jobstream/schedule/RedisJobSchedulerTest.java
-src/test/java/io/github/pandeyayushk/jobstream/schedule/SchedulerPollerTest.java
+```text
+PENDING  -> QUEUED
+RETRYING -> QUEUED
 ```
 
-### MODIFY
+The existing Worker retry scheduler is still an in-memory Phase 6 mechanism. It has not been connected to `RedisJobScheduler`. The poller has no production runtime loop or lifecycle management, and the CLI has no priority or delay submission flags.
 
-```
-src/main/java/io/github/pandeyayushk/jobstream/job/Job.java               — Add priority and scheduledAt fields
-src/main/java/io/github/pandeyayushk/jobstream/worker/Worker.java         — Delegate delayed retries to JobScheduler
-src/main/java/io/github/pandeyayushk/jobstream/cli/command/JobCommand.java— Add --priority and --delay flags
-```
+## 7. Deferred integrations
 
-### DELETE
+The following work is explicitly deferred:
 
-None.
+1. Connecting Worker retry backoff to `RedisJobScheduler`.
+2. Adding delayed and priority submission flags to the CLI.
+3. Production runtime bootstrap and automatic poller lifecycle management.
 
-### DO NOT TOUCH
+## 8. Related documentation
 
-```
-src/main/java/.../serialization/*
-src/main/java/.../executor/*
-pom.xml
-```
-
-## 10. Implementation Order
-
-1. **`Job.java`** — Add `priority` and `scheduledAt` fields.
-2. **`Priority.java`** & **`PriorityJobQueue.java`** — Multi-queue priority abstraction.
-3. **`RedisPriorityJobQueueTest.java`** — Test priority-ordered dequeueing.
-4. **`JobScheduler.java`** & **`RedisJobScheduler.java`** — ZSET storage for delayed `JobId`s.
-5. **`SchedulerPoller.java`** — Migration loop transferring mature jobs to active queues.
-6. **`SchedulerPollerTest.java`** — Verify accuracy and atomicity of time-based migration.
-7. **`Worker.java`** — Connect retry backoff to non-blocking `JobScheduler`.
-8. **`JobCommand.java`** — Expose CLI options for delayed submission.
-
-## 11. Testing Requirements
-
-### Unit & Integration Tests
-- **Priority Dequeueing:** Enqueue low-priority jobs, then high-priority job → Dequeue yields high-priority first.
-- **Scheduled Delay:** Schedule job with 2-second delay → Queue size is 0 initially → After 2.2s, poller migrates job → Worker dequeues and completes job.
-- **Non-Blocking Worker Retries:** Worker fails job with backoff → Job scheduled in ZSET → Worker thread immediately free for next task.
-
-## 12. Failure and Edge Cases
-
-- Poller crashes during transfer → Atomic Lua script guarantees zero drop or duplicate.
-- Clocks slightly out of sync → Best-effort epoch millisecond ordering.
-
-## 13. Validation
-
-```powershell
-# Compile
-mvn compile
-
-# Run priority and scheduling tests
-mvn test -Dtest="RedisPriorityJobQueueTest,RedisJobSchedulerTest,SchedulerPollerTest"
-```
-
-## 14. Completion Criteria
-
-- [ ] `Job` carries `priority` and `scheduledAt`.
-- [ ] `PriorityJobQueue` prioritizes higher tiers before lower tiers via multi-key `BRPOP`.
-- [ ] `RedisJobScheduler` stores future `JobId`s in Redis Sorted Sets.
-- [ ] `SchedulerPoller` transfers mature jobs atomically into active queues.
-- [ ] Worker retries utilize non-blocking scheduler delays.
-- [ ] All tests pass (`mvn test` exits 0).
-
-## 15. Self-Review Checklist
-
-- [ ] Are retry delays completely non-blocking for worker threads? (Must be YES).
-- [ ] Does `SchedulerPoller` clean up its threads on shutdown?
-- [ ] Are all previous tests passing?
-
-## 16. Documentation Updates
-
-### Requirements documentation
-- Update `docs/requirements/scheduling-and-priority.md` with implemented mechanisms.
-
-### Architecture documentation
-- Update `docs/architecture/project-structure.md` marking `priority` and `schedule` active.
-
-### ADRs
-- **Create ADR-010:** Redis Multi-Queue Priority & ZSET Time-Based Scheduler.
-
-### Final README Notes
-- Multi-tier priority queues powered by Redis multi-key operations.
-- Non-blocking delayed and scheduled job execution powered by Redis Sorted Sets.
-
-## 17. Git Milestone
-
-- **Branch:** `phase-8-scheduling-and-priority`
-- **Base:** `master` (after Phase 7 merge)
-- **Implementation milestone:** `PriorityJobQueue`, `JobScheduler`, and `SchedulerPoller` operational.
-- **Testing milestone:** Priority ordering and delay timing verified by integration tests.
-- **Review milestone:** ADR-010 written, self-review complete.
-- **Merge condition:** Clean build and test suite passing on master.
-
-## 18. What This Phase Enables
-
-With scheduling and priority in place:
-- **Phase 9 (Observability & HTTP API)** can monitor scheduled job counts, queue latencies, and expose REST endpoints for delayed submissions.
-- The queue engine supports production workflows requiring SLA differentiation and time-based triggering.
+- [Scheduling and Priority Requirements](../../requirements/scheduling-and-priority.md)
+- [Queue Semantics Requirements](../../requirements/queue-semantics.md)
+- [Project Structure](../../architecture/project-structure.md)
+- [System Overview](../../architecture/system-overview.md)
+- [Job Lifecycle](../../architecture/job-lifecycle.md)
+- [ADR-010: Numeric Priority Queue Ordering](../../decisions/ADR-010-numeric-priority-queue.md)
+- [ADR-011: Durable Redis Job Scheduling](../../decisions/ADR-011-durable-job-scheduling.md)

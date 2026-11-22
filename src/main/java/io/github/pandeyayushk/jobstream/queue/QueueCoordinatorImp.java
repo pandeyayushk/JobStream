@@ -17,7 +17,7 @@ public class QueueCoordinatorImp implements QueueCoordinator {
     }
 
     @Override
-    public void submit(Job job, String queueName) {
+    public Job submit(Job job, String queueName) {
         Objects.requireNonNull(job, "Job cannot be null");
 
         if (queueName == null || queueName.isBlank()) {
@@ -28,6 +28,6 @@ public class QueueCoordinatorImp implements QueueCoordinator {
 
         Job queuedJob = job.withStatus(JobStatus.QUEUED);
 
-        submissionStore.submit(job,queuedJob, queueName);
+        return submissionStore.submit(job, queuedJob, queueName);
     }
 }

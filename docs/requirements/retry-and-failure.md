@@ -38,7 +38,7 @@ PROCESSING -> FAILED -> DEAD -> DLQ
 
 `DeadLetterQueue` defines `moveToDeadLetter(Job, reason)`, `listDeadJobs(offset, limit)`, `requeue(JobId, targetQueue)`, `purge()`, and `size()`. `RedisDeadLetterQueue` stores Job IDs in `jobstream:queue:dead-letter`; full `DEAD` Job records remain in the authoritative `jobstream:job:<id>` record, and the status index is updated.
 
-`listDeadJobs` reads a list page and loads corresponding records; missing records are skipped. `purge` removes the DLQ list key; it does not delete persisted dead Job records. `size` returns the list length. Manual `requeue` returns empty when the Job does not exist or is not `DEAD`. Otherwise it resets retry count, persists `QUEUED`, removes the ID from the DLQ, updates status indexes, and pushes it to the requested queue in a Redis `MULTI`/`EXEC` transaction.
+`listDeadJobs` reads a list page and loads corresponding records; missing records are skipped. `purge` removes the DLQ list key; it does not delete persisted dead Job records. `size` returns the list length. Manual `requeue` returns empty when the Job does not exist or is not `DEAD`. Otherwise a Lua script checks the current revision and atomically removes the ID from the DLQ, persists the queued Job with an incremented revision, updates status indexes, and inserts the ID into the requested priority queue.
 
 ## 5. Worker acquisition and shutdown
 
@@ -47,7 +47,7 @@ The current Worker acquisition loop uses `dequeueNonBlocking()` and waits 50 ms 
 ## 6. Phase boundaries
 
 - **Phase 6:** retry policies and state, in-memory scheduled retry mechanism, failure handling, DLQ, and manual DLQ requeue.
-- **Phase 8:** persistent delayed scheduling using Redis Sorted Sets (ZSET), durable next-run timestamps, and arbitrary long retry delays.
+- **Phase 8 infrastructure:** numeric priority queues, durable delayed scheduling using Redis Sorted Sets (ZSET), revision-safe Job updates, and atomic scheduler release. Connecting Worker retry backoff to this durable scheduler is deferred.
 
 ## 7. Verified Phase 6 coverage
 

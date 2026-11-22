@@ -19,7 +19,7 @@ public class QueueCoordinatorImpTest {
                 Payload.empty()
         );
 
-        coordinator.submit(originalJob, "default");
+        Job persisted = coordinator.submit(originalJob, "default");
 
         assertNotNull(store.originalJob);
         assertNotNull(store.queuedJob);
@@ -35,6 +35,10 @@ public class QueueCoordinatorImpTest {
         );
 
         assertEquals("default", store.queueName);
+        assertEquals(JobStatus.QUEUED, persisted.status());
+        assertEquals(1, persisted.revision());
+        assertEquals(JobStatus.PENDING, originalJob.status());
+        assertEquals(0, originalJob.revision());
     }
 
     @Test
@@ -133,7 +137,7 @@ public class QueueCoordinatorImpTest {
         private String queueName;
 
         @Override
-        public void submit(
+        public Job submit(
                 Job originalJob,
                 Job queuedJob,
                 String queueName
@@ -141,6 +145,7 @@ public class QueueCoordinatorImpTest {
             this.originalJob = originalJob;
             this.queuedJob = queuedJob;
             this.queueName = queueName;
+            return queuedJob.withRevision(originalJob.revision() + 1);
         }
     }
 }

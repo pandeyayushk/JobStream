@@ -4,6 +4,7 @@ import io.github.pandeyayushk.jobstream.job.Job;
 import io.github.pandeyayushk.jobstream.job.JobStatus;
 import io.github.pandeyayushk.jobstream.payload.Payload;
 import io.github.pandeyayushk.jobstream.queue.RedisJobQueue;
+import io.github.pandeyayushk.jobstream.persistence.RedisJobRepository;
 import io.github.pandeyayushk.jobstream.retry.RedisDeadLetterQueue;
 import io.github.pandeyayushk.jobstream.serialization.JacksonJobSerializer;
 import org.junit.jupiter.api.AfterEach;
@@ -171,8 +172,13 @@ class InteractiveShellTest {
                 .withStatus(JobStatus.QUEUED)
                 .withStatus(JobStatus.PROCESSING)
                 .withStatus(JobStatus.FAILED);
+        RedisJobRepository repository = new RedisJobRepository(
+                redis,
+                new JacksonJobSerializer()
+        );
+        job = repository.save(job);
         deadLetterQueue.moveToDeadLetter(job, reason);
-        return job;
+        return repository.findById(job.id()).orElseThrow();
     }
 
 }

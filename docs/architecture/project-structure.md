@@ -1,197 +1,70 @@
 # Project Structure
 
-This document is the **CANONICAL reference** for the entire JobStream repository and Java package organization.
+This is the canonical guide to the implemented Java packages and their responsibilities. Phase 8 priority infrastructure lives in `queue`; scheduling infrastructure lives in `schedule`. There is no `priority` package.
 
-## Repository Structure
+## Repository layout
 
-```
-JobStream/
-├── docs/
-│   ├── architecture/        # How the system is structured
-│   ├── requirements/         # What the system must do
-│   ├── decisions/            # Why architectural choices were made (ADRs)
-│   └── versions/             # Phase-by-phase implementation guides
-├── src/
-│   ├── main/java/io/github/pandeyayushk/jobstream/
-│   │   ├── job/              # Core Job domain model, status, and identity (Zero dependencies)
-│   │   ├── payload/          # Domain payload abstraction and handling (Zero dependencies)
-│   │   ├── serialization/    # Serialization abstractions and implementations (JSON)
-│   │   ├── persistence/      # Storage abstraction and Redis repository implementation
-│   │   ├── queue/            # Queue abstraction and Redis-backed implementation
-│   │   ├── worker/           # Worker model, registration, lifecycle, heartbeat
-│   │   ├── executor/         # Job executor interface, factory, and implementations
-│   │   ├── retry/            # Retry policy, backoff calculation, and dead-letter queue
-│   │   ├── cli/              # Picocli command-line interface
-│   │   ├── schedule/         # Delayed/scheduled job support
-│   │   ├── priority/         # Priority queue support
-│   │   ├── metrics/          # Statistics, counters, and observability
-│   │   ├── api/              # HTTP API (REST endpoints)
-│   │   ├── config/           # Centralized configuration loading and validation
-│   │   └── Main.java         # Application entry point
-│   └── test/java/io/github/pandeyayushk/jobstream/
-│       ├── job/              # Unit tests for job domain
-│       ├── payload/          # Unit tests for payload
-│       ├── serialization/    # Unit & integration tests for serialization
-│       ├── persistence/      # Repository integration tests
-│       ├── queue/            # Queue integration and concurrency tests
-│       ├── worker/           # Worker lifecycle and concurrency tests
-│       ├── executor/         # Executor and registry tests
-│       ├── retry/            # Retry policy and DLQ tests
-│       ├── cli/              # CLI parsing and command tests
-│       ├── schedule/         # Scheduler and poller tests
-│       ├── priority/         # Priority queue tests
-│       ├── metrics/          # Metrics and counters tests
-│       ├── api/              # REST API endpoint tests
-│       ├── config/           # Configuration loader tests
-│       └── MainTest.java     # Existing Phase 0 smoke test
-├── pom.xml
-├── README.md
-└── .gitignore
+```text
+src/main/java/io/github/pandeyayushk/jobstream/
+  Main.java
+  cli/           Picocli commands and shared CLI context
+  config/        RedisConfig
+  executor/      JobExecutor, ExecutionResult, registry
+  job/           Job, JobId, JobStatus
+  payload/       Payload domain abstraction
+  persistence/   JobRepository and RedisJobRepository
+  queue/         JobQueue, RedisJobQueue, priority queue storage,
+                 submission coordinator and Redis submission store
+  retry/         retry policies, DeadLetterQueue and RedisDeadLetterQueue
+  schedule/      JobScheduler, RedisJobScheduler, SchedulerPoller,
+                 RedisSchedulerPoller and SchedulerPollResult
+  serialization/ JobSerializer and JacksonJobSerializer
+  worker/        Worker lifecycle, configuration and registry
+
+src/test/java/io/github/pandeyayushk/jobstream/
+  cli/ config/ executor/ job/ payload/ persistence/ queue/
+  retry/ schedule/ serialization/ worker/
 ```
 
-## Java Package Hierarchy & Dependency Rules
+Metrics and HTTP API packages are not present in `src/main/java`; they remain planned for Phase 9. Deployment and hardening work remains Phase 10.
 
-### Canonical Architectural Principle: Dependency Inward toward Domain
+## Package responsibilities and status
 
-The core domain (`job`, `payload`) represents pure business concepts. It must remain strictly independent of infrastructure, storage, network, and execution machinery.
+| Package | Responsibility and implemented types | Status |
+|---|---|---|
+| `job` | Immutable `Job`, `JobId`, `JobStatus`; priority, optional `scheduledAt`, retry metadata, and persisted revision | Implemented, Phase 1 and Phase 8 domain extension |
+| `payload` | Structured execution payload | Implemented, Phase 1 |
+| `serialization` | `JobSerializer`, `JacksonJobSerializer`; legacy-compatible persisted Job JSON | Implemented, Phase 2 |
+| `persistence` | `JobRepository`, `RedisJobRepository`, revision-aware save and status indexes | Implemented, Phases 2 and 8 concurrency updates |
+| `queue` | `JobQueue`, `RedisJobQueue`, `RedisPriorityQueueStore`, `QueueCoordinator`, `QueueCoordinatorImp`, `JobSubmissionStore`, `RedisJobSubmissionStore` | Implemented, Phases 3 and 8 priority queue |
+| `worker` | Worker acquisition, execution lifecycle, registry and heartbeat | Implemented, Phases 4–5; not wired to durable retry scheduling |
+| `executor` | `JobExecutor`, `ExecutionResult`, executor registry | Implemented, Phase 5 |
+| `retry` | Retry policy and DLQ abstractions/implementation | Implemented, Phase 6; retry delays remain Worker-local and in-memory |
+| `cli` | Picocli operator commands for submission, status, queue inspection, workers and DLQ | Implemented, Phase 7; no scheduling or priority flags |
+| `schedule` | `JobScheduler`, `RedisJobScheduler`, `SchedulerPoller`, `RedisSchedulerPoller`, `SchedulerPollResult`, `JobSchedulingException` | Infrastructure implemented, Phase 8; no runtime bootstrap |
+| `config` | `RedisConfig` | Implemented; centralized application configuration remains future work |
 
-**Dependency Inversion Rules:**
-1. **The Core Domain depends on NOTHING.** `job` and `payload` have zero package dependencies (no `config`, no `persistence`, no `Redis`, no `worker`, no `executor`).
-2. **Dependencies flow inward toward the domain:**
-   ```
-   [api] ────┐
-             ▼
-   [cli] ──> [application / coordinator]
-                   │
-         ┌─────────┼──────────────┐
-         ▼         ▼              ▼
-     [worker]   [queue]      [schedule]
-         │         │              │
-         ▼         ▼              │
-    [executor] [persistence] <────┘
-         │         │
-         ▼         ▼
-    [payload] [serialization]
-         │         │
-         └────┬────┘
-              ▼
-            [job]
-   ```
-   `application / coordinator` in this diagram is a conceptual coordination layer, not a current Java package. Coordination responsibilities remain in the packages that introduce them; this diagram does not require or introduce an `application` package.
-3. **Worker Execution Boundary:**
-   - `worker` depends on `queue`, `persistence`, and the `executor` abstraction to coordinate execution.
-   - `JobExecutor` implementations remain independent of worker machinery, Redis, `JobQueue`, and `WorkerRegistry`.
-4. **Configuration Dependency:**
-   - `config` provides operational configuration parameters.
-   - Runtime/infrastructure packages (`persistence`, `worker`, `cli`, `api`) may depend on `config`.
-   - Core domain (`job`, `payload`) and pure serialization (`serialization`) **MUST NOT** depend on `config`.
-5. **No Circular Dependencies:** Circular dependencies between any packages are strictly forbidden.
-6. **Package Restructuring:** Any change to package boundaries requires an Architecture Decision Record (ADR).
+`RedisPriorityQueueStore` owns the active priority queue's Redis key layout, ordering scripts, duplicate-membership handling, and legacy List migration. `RedisSchedulerPoller` shares that queue storage helper and owns bounded due-candidate progression and atomic release. The `Job` domain package remains independent of Redis and Jackson.
 
----
+## Data ownership and dependencies
 
-### Package Responsibilities & Allowed Dependencies
+- The serialized Job at `jobstream:job:<jobId>` is authoritative. Status sets, active queues, the DLQ, and scheduler indexes contain JobId references or routing data.
+- `QueueCoordinatorImp` prepares the `QUEUED` Job and delegates submission to `JobSubmissionStore`. `RedisJobSubmissionStore` atomically checks revision, persists the returned Job snapshot, updates status indexes, and inserts the JobId into its priority queue.
+- `RedisJobRepository`, queue submission, scheduling, and DLQ updates use optimistic concurrency when writing Job records. Stale revisions fail rather than replacing newer Job fields.
+- `RedisJobScheduler` owns durable scheduling writes. `RedisSchedulerPoller` reads authoritative Jobs and, in one release script per Job, changes status/revision, updates indexes, removes scheduling references, and inserts into the priority queue.
+- `Worker` consumes through the `JobQueue` abstraction and loads the authoritative Job through the repository. Its existing retry scheduler is still in-memory and is not connected to `RedisJobScheduler`.
 
-*Note: The interfaces/classes listed below are planned for their respective phases unless explicitly marked implemented.*
+```text
+cli -> QueueCoordinator -> JobSubmissionStore -> Redis Job + status indexes + priority queue
+worker <- JobQueue <- priority queue
+worker -> JobRepository -> authoritative Job
 
-- **`io.github.pandeyayushk.jobstream.job`**
-  - **Responsibility:** Core domain entity (`Job`), unique identity (`JobId`), and complete lifecycle state contract (`JobStatus`).
-  - **Phase Introduced:** Phase 1
-  - **Status:** Implemented in Phase 1
-  - **Implemented Types:** `Job`, `JobId`, `JobStatus`
-  - **Allowed Dependencies:** **None** (Pure Java Standard Library only).
+JobScheduler -> delayed ZSET + target Hash -> SchedulerPoller
+                                   -> atomic release -> priority queue -> Worker
+```
 
-- **`io.github.pandeyayushk.jobstream.payload`**
-  - **Responsibility:** Domain payload abstraction representing structured execution parameters.
-  - **Phase Introduced:** Phase 1
-  - **Status:** Implemented in Phase 1
-  - **Implemented Types:** `Payload`
-  - **Allowed Dependencies:** **None** (Pure Java Standard Library only).
+## Deferred Phase 8 integrations
 
-- **`io.github.pandeyayushk.jobstream.serialization`**
-  - **Responsibility:** Converting domain objects (`Job`, `Payload`) to/from portable byte or string formats across storage boundaries.
-  - **Phase Introduced:** Phase 2
-  - **Planned Types:** `JobSerializer`, `JacksonJobSerializer`
-  - **Allowed Dependencies:** `job`, `payload`
-
-- **`io.github.pandeyayushk.jobstream.persistence`**
-  - **Responsibility:** Storage repository abstraction (`JobRepository`) and Redis implementation storing `JobId -> Job`.
-  - **Phase Introduced:** Phase 2
-  - **Planned Types:** `JobRepository`, `RedisJobRepository`
-  - **Allowed Dependencies:** `job`, `payload`, `serialization`, `config`
-
-- **`io.github.pandeyayushk.jobstream.queue`**
-  - **Responsibility:** Queue abstractions (`JobQueue`) and Redis implementations storing `Queue -> JobId` with atomic enqueue/dequeue semantics.
-  - **Phase Introduced:** Phase 3
-  - **Status:** Implemented in Phase 3
-  - **Implemented Types:** `JobQueue`, `RedisJobQueue`, `QueueCoordinator`, `QueueCoordinatorImp`, `JobSubmissionStore`, `RedisJobSubmissionStore`, `QueueException`
-  - **Allowed Dependencies:** `job`, `serialization`, Redis client
-  - **Boundary:** `JobQueue` has no dependency on `JobRepository`; `JobRepository` has no dependency on `JobQueue`. `QueueCoordinatorImp` owns application-level submission and delegates Redis-specific atomic work to `JobSubmissionStore`.
-
-- **`io.github.pandeyayushk.jobstream.worker`**
-  - **Responsibility:** Worker process model, polling loop, lifecycle management, registration, and heartbeat.
-  - **Phase Introduced:** Phase 4
-  - **Status:** Implemented in Phase 4
-  - **Implemented Types:** `Worker`, `WorkerId`, `WorkerInfo`, `WorkerStatus`, `WorkerConfig`, `WorkerRegistry`, `RedisWorkerRegistry`, `WorkerException`
-  - **Allowed Dependencies:** `job`, `queue`, `persistence`, `executor`
-
-- **`io.github.pandeyayushk.jobstream.executor`**
-  - **Responsibility:** Pluggable execution abstraction (`JobExecutor`), execution result model, and executor registry/factory.
-  - **Phase Introduced:** Phase 5
-  - **Implemented Types:** `JobExecutor`, `ExecutionResult`, `ExecutorRegistry`, `DefaultExecutorRegistry`
-  - **Allowed Dependencies:** `job`, `payload` *(Explicitly: NO dependency on `worker`)*
-
-- **`io.github.pandeyayushk.jobstream.retry`**
-  - **Responsibility:** Retry policy evaluation, backoff computation, and Dead-Letter Queue (DLQ) management.
-  - **Phase Introduced:** Phase 6
-  - **Implemented Types:** `RetryPolicy`, `NoRetryPolicy`, `FixedDelayRetryPolicy`, `ExponentialBackoffRetryPolicy`, `DeadLetterQueue`, `RedisDeadLetterQueue`
-  - **Allowed Dependencies:** `job`, `queue`, `persistence`, `config`
-
-- **`io.github.pandeyayushk.jobstream.cli`**
-  - **Responsibility:** Command-line operational tool for operators.
-  - **Phase Introduced:** Phase 7
-  - **Status:** Implemented in Phase 7
-  - **Implemented Types:** `JobStreamCli`, `CliContext`, command classes, exception handlers, `TableFormatter`
-  - **Allowed Dependencies:** `job`, `payload`, `queue`, `persistence`, `worker`, `retry`
-
-- **`io.github.pandeyayushk.jobstream.schedule`**
-  - **Responsibility:** Time-delayed execution and scheduled job migration poller.
-  - **Phase Introduced:** Phase 8
-  - **Planned Types:** `JobScheduler`, `RedisJobScheduler`, `SchedulerPoller`
-  - **Allowed Dependencies:** `job`, `queue`, `persistence`, `config`
-
-- **`io.github.pandeyayushk.jobstream.priority`**
-  - **Responsibility:** Priority-differentiated queueing and multi-tier queue dispatch.
-  - **Phase Introduced:** Phase 8
-  - **Planned Types:** `Priority`, `PriorityJobQueue`, `RedisPriorityJobQueue`
-  - **Allowed Dependencies:** `job`, `queue`, `config`
-
-- **`io.github.pandeyayushk.jobstream.metrics`**
-  - **Responsibility:** Counters, gauges, and throughput statistics collection.
-  - **Phase Introduced:** Phase 9
-  - **Planned Types:** `JobMetrics`, `RedisJobMetrics`
-  - **Allowed Dependencies:** `job`, `config`
-
-- **`io.github.pandeyayushk.jobstream.api`**
-  - **Responsibility:** REST HTTP endpoints and web server lifecycle.
-  - **Phase Introduced:** Phase 9
-  - **Planned Types:** `JobStreamApiServer`, controllers, DTOs
-  - **Allowed Dependencies:** `job`, `queue`, `persistence`, `worker`, `retry`, `metrics`, `config`
-
-- **`io.github.pandeyayushk.jobstream.config`**
-  - **Responsibility:** Centralized configuration loading (environment variables, system properties, files) and validation.
-  - **Phase Introduced:** Phase 2 (basic `RedisConfig`), Phase 10 (unified `JobStreamConfig`)
-  - **Planned Types:** `RedisConfig`, `JobStreamConfig`, `ConfigLoader`
-  - **Allowed Dependencies:** **None** (Pure Java Standard Library only).
-
----
-
-## Package Boundary Rules
-
-1. **Information Hiding:** Expose minimal public interfaces. Implementations should remain package-private unless cross-package construction requires visibility.
-2. **Mirroring in Tests:** Test packages in `src/test/java` must mirror production packages in `src/main/java` exactly.
-3. **No Premature Directory Creation:** Directories must not be created in `src/` until the phase introducing that package is actively implemented.
-
-## Current State (Phase 7)
-
-Phases 1 through 7 are complete. The `job`, `payload`, `serialization`, `persistence`, `queue`, `worker`, `executor`, `retry`, and `cli` packages are implemented. Phase 7 adds a Picocli operator interface over existing domain and application abstractions. Scheduling/priority (Phase 8), metrics/API (Phase 9), and deployment/hardening (Phase 10) remain planned; those directories describe intended organization, not implemented features.
+1. Connecting Worker retry backoff to `RedisJobScheduler`.
+2. Adding delayed and priority submission flags to the CLI.
+3. Production runtime bootstrap and automatic poller lifecycle management.

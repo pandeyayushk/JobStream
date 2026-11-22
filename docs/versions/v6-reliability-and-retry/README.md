@@ -67,7 +67,7 @@ The Redis integration tests require a real Redis instance. No test count is stat
 ## 8. Phase 6 / Phase 8 responsibility boundary
 
 - **Phase 6 complete:** retry policy, retry state persistence, in-memory scheduled retries, failure handling, DLQ, and manual requeue.
-- **Phase 8 planned:** persistent delayed scheduling with Redis Sorted Sets (ZSET), durable next-run timestamps, and arbitrary long retry delays; scheduling/priority features are not yet implemented.
+- **Phase 8 infrastructure implemented:** numeric priority queues, durable delayed scheduling with Redis Sorted Sets (ZSET), revision-safe updates, and atomic poller release. Connecting Worker retry backoff to the durable scheduler remains deferred.
 
 ## 9. Related documents
 

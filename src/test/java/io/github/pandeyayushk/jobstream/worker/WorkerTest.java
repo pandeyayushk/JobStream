@@ -258,6 +258,8 @@ class WorkerTest {
                 )
         );
 
+        assertTrue(repository.failedJobSaved.await(3, TimeUnit.SECONDS));
+
         assertEquals(
                 JobStatus.FAILED,
                 repository.findById(firstJob.id())
@@ -757,10 +759,21 @@ class WorkerTest {
 
         private final Map<JobId, Job> jobs =
                 new ConcurrentHashMap<>();
+        private final CountDownLatch failedJobSaved = new CountDownLatch(1);
 
         @Override
-        public void save(Job job) {
-            jobs.put(job.id(), job);
+        public Job save(Job job) {
+            Job current = jobs.get(job.id());
+            if ((current == null && job.revision() != 0)
+                    || (current != null && current.revision() != job.revision())) {
+                throw new IllegalStateException("Stale Job revision");
+            }
+            Job persisted = job.withRevision(job.revision() + 1);
+            jobs.put(job.id(), persisted);
+            if (persisted.status() == JobStatus.FAILED) {
+                failedJobSaved.countDown();
+            }
+            return persisted;
         }
 
         @Override

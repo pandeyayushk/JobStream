@@ -388,7 +388,7 @@ public class Worker {
             Job processingJob =
                     job.withStatus(JobStatus.PROCESSING);
 
-            jobRepository.save(processingJob);
+            processingJob = jobRepository.save(processingJob);
 
             JobExecutor executor =
                     executorRegistry.get(processingJob.type())
@@ -477,7 +477,7 @@ public class Worker {
                 .withStatus(JobStatus.FAILED)
                 .withMetadata("failure.reason", reason);
 
-        jobRepository.save(failedJob);
+        failedJob = jobRepository.save(failedJob);
 
         return failedJob;
     }
@@ -525,7 +525,7 @@ public class Worker {
         Job retryingJob =
                 failedJob.withRetryAttempt(reason);
 
-        jobRepository.save(retryingJob);
+        retryingJob = jobRepository.save(retryingJob);
 
         Duration backoff;
 
@@ -621,7 +621,7 @@ public class Worker {
                             JobStatus.QUEUED
                     );
 
-            jobRepository.save(queuedJob);
+            queuedJob = jobRepository.save(queuedJob);
 
             queue.enqueue(
                     queuedJob.id(),

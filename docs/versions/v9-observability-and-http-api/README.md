@@ -6,7 +6,7 @@ Provide production observability (counters, gauges, throughput statistics) and a
 
 ## 2. Why This Phase Exists
 
-Phase 7 is planned to provide an interactive CLI for human operators. This phase will add the programmatic interfaces and observability needed by production architectures:
+Phase 7 provides an interactive CLI for human operators. This phase will add the programmatic interfaces and observability needed by production architectures:
 - Programmatic machine-to-machine HTTP interfaces (e.g., submitting jobs from Python, Go, Node.js, or frontend services).
 - System health endpoints (`/health`, `/metrics`) for uptime probes (Kubernetes liveness/readiness, Prometheus monitoring).
 - Aggregated real-time metrics (throughput, error rates, queue latency, active workers) to understand system performance and detect bottlenecks.
@@ -38,7 +38,7 @@ Phase 7 is planned to provide an interactive CLI for human operators. This phase
 
 ## 4. Prerequisites
 
-- Phase 8 complete (priority and scheduling working) — prerequisite target; Phase 8 is currently planned
+- Phase 8 scheduling and priority infrastructure complete; Worker retry, CLI scheduling flags, and automatic scheduler bootstrap remain deferred
 - Redis instance running
 - Understanding of REST principles and HTTP status codes (200, 201, 400, 404, 500)
 
