@@ -12,6 +12,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrowsExactly;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class JacksonJobSerializerTest {
 
@@ -35,6 +36,8 @@ public class JacksonJobSerializerTest {
         assertEquals(original.createdAt(),deserialized.createdAt());
         assertEquals(original.updatedAt(),deserialized.updatedAt());
         assertEquals(original.metadata(),deserialized.metadata());
+        assertEquals(0, deserialized.priority());
+        assertEquals(original.scheduledAt(), deserialized.scheduledAt());
     }
 
     @Test
@@ -150,5 +153,42 @@ public class JacksonJobSerializerTest {
                 original.lastFailedAt(),
                 restored.lastFailedAt()
         );
+    }
+
+    @Test
+    void priorityAndScheduledAtSurviveSerializationRoundTrip() {
+        Instant scheduledAt = Instant.parse("2027-02-03T04:05:06.123456789Z");
+        Job original = Job.create("Email", Payload.empty())
+                .withPriority(-42)
+                .withScheduledAt(scheduledAt);
+
+        Job restored = serializer.deserialize(serializer.serialize(original));
+
+        assertEquals(-42, restored.priority());
+        assertEquals(scheduledAt, restored.scheduledAt().orElseThrow());
+    }
+
+    @Test
+    void legacyJobWithoutPriorityOrScheduledAtDeserializesWithDefaults() {
+        String legacyJson = """
+                {
+                  "id": "00000000-0000-0000-0000-000000000001",
+                  "type": "Email",
+                  "status": "PENDING",
+                  "payload": {},
+                  "createdAt": "2026-09-20T10:00:00Z",
+                  "updatedAt": "2026-09-20T10:00:00Z",
+                  "metadata": {},
+                  "retryCount": 0,
+                  "maxRetries": 3,
+                  "lastErrorReason": null,
+                  "lastFailedAt": null
+                }
+                """;
+
+        Job restored = serializer.deserialize(legacyJson);
+
+        assertEquals(0, restored.priority());
+        assertTrue(restored.scheduledAt().isEmpty());
     }
 }

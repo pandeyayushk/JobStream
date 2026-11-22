@@ -25,6 +25,68 @@ public class JobTest {
         assertEquals("email:send",job.type());
         assertEquals(payload,job.payload());
         assertTrue(job.metadata().isEmpty());
+        assertEquals(0, job.priority());
+        assertTrue(job.scheduledAt().isEmpty());
+    }
+
+    @Test
+    void withPriorityReturnsAnUpdatedImmutableCopyAndAcceptsAnyInteger() {
+        Job original = Job.create("email:send", Payload.empty());
+        Instant originalUpdatedAt = original.updatedAt();
+
+        Job negative = original.withPriority(-17);
+        Job positive = original.withPriority(Integer.MAX_VALUE);
+
+        assertNotSame(original, negative);
+        assertEquals(0, original.priority());
+        assertEquals(-17, negative.priority());
+        assertEquals(Integer.MAX_VALUE, positive.priority());
+        assertTrue(negative.updatedAt().isAfter(originalUpdatedAt));
+    }
+
+    @Test
+    void withScheduledAtReturnsAnUpdatedImmutableCopyAndRejectsNull() {
+        Job original = Job.create("email:send", Payload.empty());
+        Instant scheduledAt = Instant.parse("2027-01-01T12:00:00Z");
+
+        Job scheduled = original.withScheduledAt(scheduledAt);
+
+        assertNotSame(original, scheduled);
+        assertTrue(original.scheduledAt().isEmpty());
+        assertEquals(scheduledAt, scheduled.scheduledAt().orElseThrow());
+        assertTrue(scheduled.updatedAt().isAfter(original.updatedAt()));
+        assertThrowsExactly(
+                NullPointerException.class,
+                () -> original.withScheduledAt(null)
+        );
+    }
+
+    @Test
+    void lifecycleAndRetryCopiesPreservePriorityAndScheduledAt() {
+        Instant scheduledAt = Instant.parse("2027-01-01T12:00:00Z");
+        Job job = Job.create("email:send", Payload.empty())
+                .withPriority(12)
+                .withScheduledAt(scheduledAt)
+                .withMetadata("source", "test")
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED);
+
+        Job retrying = job.withRetryAttempt("temporary failure");
+        assertEquals(12, retrying.priority());
+        assertEquals(scheduledAt, retrying.scheduledAt().orElseThrow());
+
+        Job dead = retrying
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED)
+                .withStatus(JobStatus.DEAD);
+        Job requeued = dead.resetRetryForRequeue();
+
+        assertEquals(12, requeued.priority());
+        assertEquals(scheduledAt, requeued.scheduledAt().orElseThrow());
+        assertEquals("test", requeued.metadata().get("source"));
+        assertEquals(0, requeued.retryCount());
     }
 
     @Test

@@ -20,6 +20,8 @@ public final class Job {
     private final int retryCount;
     private final String lastErrorReason;
     private final Instant lastFailedAt;
+    private final int priority;
+    private final Instant scheduledAt;
 
      private Job(JobId id, String type, JobStatus status, Payload payload, Instant createdAt, Instant updatedAt, Map<String, String> metadata) {
          this(
@@ -33,6 +35,8 @@ public final class Job {
                  0,
                  DEFAULT_MAX_RETRIES,
                  null,
+                 null,
+                 0,
                  null
          );
     }
@@ -49,6 +53,38 @@ public final class Job {
             int maxRetries,
             String lastErrorReason,
             Instant lastFailedAt
+    ) {
+        this(
+                id,
+                type,
+                status,
+                payload,
+                createdAt,
+                updatedAt,
+                metadata,
+                retryCount,
+                maxRetries,
+                lastErrorReason,
+                lastFailedAt,
+                0,
+                null
+        );
+    }
+
+    private Job(
+            JobId id,
+            String type,
+            JobStatus status,
+            Payload payload,
+            Instant createdAt,
+            Instant updatedAt,
+            Map<String, String> metadata,
+            int retryCount,
+            int maxRetries,
+            String lastErrorReason,
+            Instant lastFailedAt,
+            int priority,
+            Instant scheduledAt
     ) {
         if (id == null) {
             throw new NullPointerException("Job Id cannot be null");
@@ -107,6 +143,8 @@ public final class Job {
         this.maxRetries = maxRetries;
         this.lastErrorReason = lastErrorReason;
         this.lastFailedAt = lastFailedAt;
+        this.priority = priority;
+        this.scheduledAt = scheduledAt;
     }
 
     public static Job create(String type, Payload payload){
@@ -159,6 +197,38 @@ public final class Job {
                 maxRetries,
                 lastErrorReason,
                 lastFailedAt
+        );
+    }
+
+    public static Job reconstitute(
+            JobId id,
+            String type,
+            JobStatus status,
+            Payload payload,
+            Instant createdAt,
+            Instant updatedAt,
+            Map<String, String> metadata,
+            int retryCount,
+            int maxRetries,
+            String lastErrorReason,
+            Instant lastFailedAt,
+            int priority,
+            Instant scheduledAt
+    ) {
+        return new Job(
+                id,
+                type,
+                status,
+                payload,
+                createdAt,
+                updatedAt,
+                metadata,
+                retryCount,
+                maxRetries,
+                lastErrorReason,
+                lastFailedAt,
+                priority,
+                scheduledAt
         );
     }
 
@@ -243,7 +313,9 @@ public final class Job {
                 newRetryCount,
                 maxRetries,
                 failureReason,
-                failureTime
+                failureTime,
+                priority,
+                scheduledAt
         );
     }
 
@@ -265,8 +337,55 @@ public final class Job {
                 newRetryCount,
                 maxRetries,
                 newLastErrorReason,
-                newLastFailedAt
+                newLastFailedAt,
+                priority,
+                scheduledAt
         );
+    }
+
+    public Job withPriority(int newPriority) {
+        return new Job(
+                id,
+                type,
+                status,
+                payload,
+                createdAt,
+                nextUpdatedAt(),
+                metadata,
+                retryCount,
+                maxRetries,
+                lastErrorReason,
+                lastFailedAt,
+                newPriority,
+                scheduledAt
+        );
+    }
+
+    public Job withScheduledAt(Instant instant) {
+        if (instant == null) {
+            throw new NullPointerException("Scheduled time cannot be null");
+        }
+
+        return new Job(
+                id,
+                type,
+                status,
+                payload,
+                createdAt,
+                nextUpdatedAt(),
+                metadata,
+                retryCount,
+                maxRetries,
+                lastErrorReason,
+                lastFailedAt,
+                priority,
+                instant
+        );
+    }
+
+    private Instant nextUpdatedAt() {
+        Instant now = Instant.now();
+        return now.isAfter(updatedAt) ? now : updatedAt.plusNanos(1);
     }
 
     public Job resetRetryForRequeue() {
@@ -287,7 +406,9 @@ public final class Job {
                 0,
                 maxRetries,
                 lastErrorReason,
-                lastFailedAt
+                lastFailedAt,
+                priority,
+                scheduledAt
         );
     }
 
@@ -333,5 +454,13 @@ public final class Job {
 
     public Optional<Instant> lastFailedAt() {
         return Optional.ofNullable(lastFailedAt);
+    }
+
+    public int priority() {
+        return priority;
+    }
+
+    public Optional<Instant> scheduledAt() {
+        return Optional.ofNullable(scheduledAt);
     }
 }
