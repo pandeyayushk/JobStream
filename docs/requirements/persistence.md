@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-Defines the implemented contract and responsibilities for durable storage of job entities, ensuring that job state survives application restarts independently of future queueing mechanisms.
+Defines the implemented contract and responsibilities for durable Job storage, authoritative records, status indexes, and revision-safe concurrent updates.
 
 ---
 
@@ -11,13 +11,13 @@ Defines the implemented contract and responsibilities for durable storage of job
 ### 2.1 Repository Abstraction (`JobRepository`)
 
 - All persistence operations are defined behind a technology-neutral interface:
-  - `void save(Job job)`: Persists a new job or updates an existing job.
+  - `Job save(Job job)`: Persists a new revision and returns the persisted Job snapshot.
   - `Optional<Job> findById(JobId id)`: Retrieves the current state of a job by its unique identity.
   - `boolean delete(JobId id)`: Permanently deletes a job record and reports whether it existed.
   - `List<Job> findByStatus(JobStatus status)`: Queries jobs by lifecycle state.
   - `boolean exists(JobId id)`: Checks existence without full deserialization overhead.
 - The interface does not leak Redis-specific commands, keys, or types to callers.
-- **Contract reconciliation note:** Earlier requirements documented `delete()` as returning `void`; the current implemented interface returns `boolean`. This mismatch should be reconciled in a later contract review.
+- A stale revision is rejected with `ConcurrentJobUpdateException`; callers must use the returned persisted snapshot as the basis for later updates.
 
 ### 2.2 Storage Model: `JobId -> Job Record`
 
@@ -38,9 +38,9 @@ jobstream:status:<STATUS>
        +--> Set<JobId>
 ```
 
-The Job record is authoritative. Status sets are secondary indexes maintained by the repository.
+The Job record is authoritative. Status sets are secondary indexes maintained atomically with repository writes.
 
-- `save()` serializes the job, stores its JSON under the job key, and adds its ID to the current status set. When an existing job has changed status, it removes the ID from the prior status set before adding it to the new one.
+- `save()` compares the supplied revision with the current record in a Lua script, stores the JSON with its incremented revision, and updates the old/current status indexes atomically. Stale snapshots are rejected; key-type or record validation failures do not partially update the record and indexes.
 - `findById()` gets the JSON by `JobId`, returns `Optional.empty()` when absent, and deserializes a present record.
 - `exists()` checks the authoritative job key.
 - `findByStatus()` uses `SMEMBERS` on the status set, retrieves each corresponding job record, and skips missing records. It does not use `KEYS *`.
@@ -60,14 +60,22 @@ The Job record is authoritative. Status sets are secondary indexes maintained by
 
 ---
 
-## 3. Non-Functional Requirements
+## 3. Revision and write concurrency
+
+- New Jobs begin at revision zero. Legacy serialized Jobs without a revision are treated as revision zero.
+- Repository, queue submission, scheduler, and DLQ Job record writes use revision checks and increment the revision.
+- Queue submission and scheduling also update their related indexes in the same Lua operation as the Job record write.
+- `JobRepository.save()` returns the exact persisted snapshot with its new revision. Queue submission returns its exact committed queued snapshot; no follow-up repository read is required.
+- Scheduler writes compare the full current serialized Job in addition to revision-aware write protection, allowing conflict retry without losing newer priority, schedule, retry, or metadata fields.
+
+## 4. Non-Functional Requirements
 
 - **Durability:** Persisted jobs can survive application and Redis process restarts when the Redis instance is configured with appropriate persistence settings. Redis durability configuration has not been validated by this phase.
-- **Production hardening (deferred):** `save()` consists of multiple Redis operations rather than an atomic transaction. Status-index updates are therefore not crash-atomic, and concurrent read-modify-write status updates have not yet been hardened.
+- **Remaining hardening:** Redis persistence settings and durability across Redis server failures are operational concerns and are not validated by the repository implementation.
 
 ---
 
-## 4. Implemented Design (Phase 2)
+## 5. Implemented Design (Phase 2 and Phase 8 concurrency update)
 
 - **Storage Structure in Redis:** Redis Strings hold complete serialized job documents; Redis Sets provide secondary status indexes.
 - **Client Library:** Jedis 8.0.1 `RedisClient`.
@@ -75,13 +83,13 @@ The Job record is authoritative. Status sets are secondary indexes maintained by
 
 ---
 
-## 5. Dependencies
+## 6. Dependencies
 
 - Domain Model (Phase 1: `Job`, `JobId`, `JobStatus`)
 - Serialization (Phase 2: `JobSerializer`)
 
 ---
 
-## 6. Phase Ownership
+## 7. Phase Ownership
 
 - **Phase 2 (Serialization & Persistence):** Implements `JobRepository` and `RedisJobRepository`.

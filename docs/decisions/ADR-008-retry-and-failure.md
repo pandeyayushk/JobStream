@@ -33,29 +33,29 @@ Worker records failure, evaluates policy, persists `RETRYING`, and schedules req
 
 `DeadLetterQueue` defines dead-letter movement, paginated listing, manual requeue, purge, and size operations. `RedisDeadLetterQueue` stores Job IDs in Redis list `jobstream:queue:dead-letter`; the full `DEAD` record remains at `jobstream:job:<id>` and its status index is updated. Purge deletes the list key, not the Job records. Missing records encountered by listing are skipped.
 
-Moving a failed Job to the DLQ persists `DEAD`, updates status indexes, and pushes the ID in one `MULTI`/`EXEC` transaction. `RedisDeadLetterQueue.requeue` returns empty for missing or non-DEAD jobs. For a DEAD job, it removes the DLQ reference, persists QUEUED, updates indexes, resets retry count, and pushes to the target queue atomically.
+Moving a failed Job to the DLQ persists `DEAD`, updates status indexes, and pushes the ID in one Lua script. `RedisDeadLetterQueue.requeue` returns empty for missing or non-DEAD jobs. For a DEAD job, a Lua script checks the current revision, removes the DLQ reference, persists QUEUED with the next revision, updates indexes, resets retry count, and inserts into the target priority queue atomically.
 
 ### Redis transaction/resource lifecycle
 
-Transactions in `RedisJobSubmissionStore`, `RedisWorkerRegistry`, and `RedisDeadLetterQueue` use try-with-resources so transaction resources are closed after execution or failure. This addresses the Redis resource-lifecycle issue where integration-test business logic could finish but cleanup hung while transaction resources remained open. Redis clients remain injected resources owned by their creators.
+`RedisWorkerRegistry` uses `MULTI`/`EXEC` with try-with-resources so transaction resources are closed after execution or failure. Job submission and DLQ writes use Lua scripts; Redis clients remain injected resources owned by their creators.
 
 ### Phase 6 and Phase 8 boundary
 
-Phase 6 owns retry policy, retry state, in-memory scheduled retry execution, failure handling, DLQ, and manual requeue. Phase 8 owns persistent delayed scheduling using Redis Sorted Sets (ZSET), durable next-run timestamps, and arbitrary long retry delays. Phase 6 does not claim persistence for pending delay timers.
+Phase 6 owns retry policy, retry state, in-memory scheduled retry execution, failure handling, DLQ, and manual requeue. Phase 8 implements numeric priority queues, persistent delayed scheduling using Redis Sorted Sets (ZSET), revision safety, and atomic poller release. Worker retry backoff has not been connected to the durable scheduler; pending Worker-local delay timers still do not survive restart.
 
 ## Consequences
 
 - Retry attempt history and last failure diagnostics travel with the persisted Job through Jackson serialization.
 - Processing capacity remains available while retry delay elapses.
 - Exhausted/non-retryable failures remain inspectable in Redis and can be manually requeued.
-- A process restart can lose retries waiting in the in-memory scheduler; durable delayed retry is future Phase 8 work.
-- Redis transaction scope releases transaction resources and makes DLQ requeue a single Redis transaction.
+- A process restart can lose retries waiting in the in-memory scheduler; the durable scheduler exists but Worker retry integration remains deferred.
+- The DLQ move/requeue scripts update Job state, status indexes, and queue/list references atomically.
 
 ## Known limitations and future work
 
-- Pending scheduled retries are not durable and no arbitrary long-delay scheduler exists in Phase 6.
-- `RedisJobRepository` status changes outside the transaction-backed submission/DLQ operations are not general compare-and-set claims.
-- Phase 8 should provide durable due-time storage and dispatch; operator-facing CLI/API is planned for Phases 7 and 9.
+- Pending retries held in the Worker-local scheduler are not durable. Durable scheduling is available through Phase 8 infrastructure but is not wired to Worker backoff.
+- Revision-based Job writes reject stale snapshots, but do not provide Worker leases or an atomic `QUEUED -> PROCESSING` claim protocol.
+- Phase 8 Worker retry wiring and priority/delay CLI options remain deferred; HTTP API work remains planned for Phase 9.
 
 ## Alternatives considered
 

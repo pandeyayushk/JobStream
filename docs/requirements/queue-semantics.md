@@ -1,12 +1,12 @@
 # Queue Semantics Requirements
 
-## 1. Purpose
+## Purpose
 
-Defines the implemented Phase 3 queue contract: FIFO dispatch of `JobId` values and atomic submission of a queued job to Redis.
+Define the implemented active queue contract: named priority ordering over JobId references, duplicate protection, legacy FIFO List migration, and atomic Job submission.
 
-## 2. Queue Contract
+## Queue API
 
-`JobQueue` operates only on `JobId` values:
+`JobQueue` operates on `JobId` values:
 
 ```java
 void enqueue(JobId jobId, String queueName);
@@ -16,46 +16,30 @@ long size(String queueName);
 List<JobId> peek(String queueName, int count);
 ```
 
-`RedisJobQueue` stores IDs at `jobstream:queue:<queueName>`; it never stores a complete `Job`.
+## Priority order and FIFO ties
 
-### FIFO and inspection
+- `Job.priority()` is an integer defaulting to zero; larger integers have higher priority. Negative values are valid.
+- `RedisJobQueue` stores each active named queue in a Redis Sorted Set at `jobstream:priority-queue:<queueName>`, with score equal to negative priority.
+- A fixed-width Redis Stream ID in the member orders jobs of equal score FIFO by atomic insertion order. The Stream key `jobstream:priority-sequence:<queueName>` allocates that ordering ID; `jobstream:priority-members:<queueName>` maps JobId to its unique member.
+- Queue structures contain JobIds, not serialized Jobs. `RedisJobQueue.enqueue` reads priority from the authoritative Job record and uses zero when the record is absent or has legacy priority data.
+- Lua scripts atomically maintain queue entries and membership. Dequeue removes the first (highest-priority, earliest equal-priority) member and its membership entry; it returns only the JobId.
+- Each named queue has an independent order. `size` counts active ZSET members and `peek` returns entries in dequeue order without removal.
 
-- Enqueue uses `LPUSH`.
-- Non-blocking dequeue uses `RPOP`; blocking dequeue uses `BRPOP`.
-- Thus jobs enqueued as `Job1`, `Job2`, and `Job3` are dequeued as `Job1`, `Job2`, and `Job3`.
-- The physical Redis list is newest-to-oldest. `peek` reads and reverses the relevant tail range, returning logical FIFO order without removal.
-- Named queues are isolated. `size` uses the Redis list length.
+`dequeueNonBlocking` returns empty when no JobId is ready. `dequeue` repeatedly checks the queue for a positive timeout and returns empty when it expires; the implementation uses short waits between non-blocking Redis operations rather than Redis `BRPOP`. Null or blank queue names, null IDs, invalid timeouts, and negative peek counts are rejected; `peek(..., 0)` returns an empty list. Redis failures and malformed returned IDs are reported as `QueueException`.
 
-### Blocking, validation, and failures
+## Legacy List compatibility
 
-- `dequeue` requires a non-null, positive `Duration`. Redis blocking time is expressed in whole seconds; the implementation rounds a fractional second up rather than claiming sub-second precision.
-- A timed-out blocking dequeue and an empty non-blocking dequeue return `Optional.empty()`.
-- Null or blank queue names, null IDs, and negative peek counts are rejected with `IllegalArgumentException`; `peek(..., 0)` returns an empty list.
-- Redis/Jedis failures, and an invalid ID returned from Redis, are reported as `QueueException`.
-- `RPOP` and `BRPOP` atomically remove one list element. Competing consumers therefore cannot receive the same removed ID during normal Redis operation.
+The former active FIFO List key `jobstream:queue:<queueName>` is a migration source, not the active queue representation. On first use of a queue name, an atomic migration reads entries in their original FIFO order, loads priority from authoritative Job records, populates the priority ZSET and membership Hash, and deletes the old List after migration. Missing or legacy Jobs default to priority zero. Duplicate IDs are represented once. The DLQ List `jobstream:queue:dead-letter` is separate and remains a List.
 
-## 3. Submission Boundary
+## Submission boundary
 
-`QueueCoordinator` owns the application-level `submit(Job, String)` operation. `QueueCoordinatorImp` validates its inputs, creates `queuedJob` by transitioning the supplied job to `QUEUED`, and passes both the original and queued jobs to `JobSubmissionStore`. It neither invokes Redis directly nor depends on `RedisJobQueue`.
+`QueueCoordinatorImp` validates inputs, creates a `QUEUED` Job copy, and delegates to `JobSubmissionStore`; it does not issue Redis commands. `RedisJobSubmissionStore` uses a Lua compare-and-set script to atomically validate the Job revision and Redis key types, persist the queued Job snapshot, update status indexes, allocate its FIFO member, and insert it into the priority queue. The API returns the exact persisted queued snapshot, including its incremented revision.
 
-`RedisJobSubmissionStore` is the Redis-specific implementation. In one `MULTI`/`EXEC` transaction it performs:
+Job records remain authoritative. The queue and status indexes are references; a stale submission snapshot is rejected instead of overwriting a newer Job. Legacy queue migration runs before the submission script and is itself atomic.
 
-1. `SET jobstream:job:<id> <queued-job-json>`
-2. `SREM jobstream:status:<original-status> <id>`
-3. `SADD jobstream:status:QUEUED <id>`
-4. `LPUSH jobstream:queue:<queueName> <id>`
+## Ownership and boundaries
 
-The original job identifies the status index to remove; the queued job is the state persisted. This supports, for example, both `PENDING → QUEUED` and valid `DEAD → QUEUED` transitions. The job record remains authoritative in `JobRepository`; the queue remains a reference list.
-
-`MULTI`/`EXEC` executes the queued commands sequentially without interleaving from other clients. It is not a traditional rollback transaction: Redis does not undo commands that have already executed if a later command fails at execution time.
-
-## 4. Ownership and Boundaries
-
-- Phase 3 owns submission transitions to `QUEUED`, including `PENDING → QUEUED`.
-- Dequeue returns only a `JobId`; it does not perform `QUEUED → PROCESSING`.
-- Phase 4's Worker will load the authoritative job from `JobRepository` after dequeue and own `QUEUED → PROCESSING`.
-- `JobRepository` owns job persistence. `JobQueue` owns list operations. Neither depends on the other, and submission logic does not belong in `RedisJobQueue`.
-
-## 5. Verified Coverage
-
-The Phase 3 tests cover FIFO enqueue/dequeue and peek, timeout and empty behavior, size, named-queue isolation, input validation, Redis failure translation, ten concurrent consumers of fifty unique IDs, atomic submission, persisted status/index verification, `PENDING → QUEUED`, `DEAD → QUEUED`, submitted-ID queueing, and coordinator validation/transition behavior.
+- Queue submission owns `PENDING -> QUEUED`; durable scheduler release also owns `PENDING -> QUEUED` and `RETRYING -> QUEUED` for due scheduled Jobs.
+- Dequeue does not perform `QUEUED -> PROCESSING`. Worker loads the authoritative Job and owns that transition.
+- `JobRepository` owns Job persistence. `JobQueue` owns ready-queue operations. `QueueCoordinator` is the application submission boundary.
+- `RedisSchedulerPoller` reuses the same priority ordering and membership representation when releasing scheduled Jobs.

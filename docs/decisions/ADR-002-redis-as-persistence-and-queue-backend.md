@@ -37,11 +37,13 @@ Redis/Jedis errors at the repository boundary are translated to `PersistenceExce
 - Full job state is available through a simple key lookup, while status queries avoid a full key scan.
 - The pure domain model remains independent of Redis and Jackson.
 - Redis persistence depends on the operational Redis configuration for durability across Redis restarts; Phase 2 does not validate AOF/RDB durability settings.
-- `save` is currently multiple Redis operations, not an atomic transaction. A crash may leave the status index inconsistent with the authoritative job record, and concurrent read-modify-write status changes are not yet hardened. These are deferred production-hardening concerns.
+- Historical note: the original persistence implementation used multiple Redis operations for `save`. Phase 8 replaced that write protocol with revision-checked Lua compare-and-set updates that atomically write the authoritative Job record and status indexes; see [ADR-011](ADR-011-durable-job-scheduling.md).
 
 ## 4. Queue Backend (Phase 3)
 
-`RedisJobQueue` stores only `JobId` strings in Redis Lists at `jobstream:queue:<queueName>`. It uses `LPUSH` to enqueue and `RPOP` or `BRPOP` to remove the oldest item, giving logical FIFO order even though the physical list order is newest-to-oldest. Atomic submission of the persisted queued job, status-index update, and list insertion is specified by ADR-005.
+This section records the original Phase 3 FIFO implementation. The active queue representation was upgraded in Phase 8; see [ADR-010](ADR-010-numeric-priority-queue.md). The legacy List key below is now used only as a migration source, while the DLQ retains its separate List.
+
+Historical Phase 3 implementation: `RedisJobQueue` stored only `JobId` strings in Redis Lists at `jobstream:queue:<queueName>`, using `LPUSH` and `RPOP`/`BRPOP` for FIFO. In Phase 8, that List became a legacy migration source; active dispatch uses the priority Sorted Set described in [ADR-010](ADR-010-numeric-priority-queue.md). Atomic submission is now revision-aware Lua, as described in [ADR-005](ADR-005-atomic-redis-job-submission-with-multi-exec.md) and ADR-010.
 
 ## 5. Alternatives Considered
 

@@ -1,44 +1,65 @@
 # System Overview
 
-JobStream is a Redis-backed job queue. Phases 1-7 are implemented. Phases 8-10 remain planned.
+JobStream is a Java 21 Redis-backed job queue. Phase 8 priority and durable scheduling infrastructure is implemented. Worker retry integration, CLI scheduling flags, and automatic poller bootstrap remain deferred. Metrics/API (Phase 9) and deployment/hardening (Phase 10) are planned.
 
-## 1. Implemented subsystems
+## Implemented subsystems
 
-1. **Job domain (`job`, `payload`)**: immutable Job state, identity, lifecycle status, payload, and retry diagnostics.
-2. **Serialization and persistence**: Jackson JSON serialization and authoritative Redis Job records with status indexes. Phase 6 retry fields are part of the persisted Job representation.
-3. **Queue (`queue`)**: FIFO Redis lists contain `JobId` values only. Submission atomically persists the queued Job, updates its status index, and enqueues the ID.
-4. **Worker (`worker`)**: lifecycle, registry, heartbeat, bounded processing, queue acquisition, failure handling, retry scheduling, and DLQ integration.
-5. **Execution (`executor`)**: type-based `JobExecutor` dispatch and explicit success/failure results.
-6. **Reliability (`retry`)**: no-retry, fixed-delay, and jittered exponential policies; in-memory scheduled retries; Redis DLQ and manual requeue.
-7. **CLI (`cli`)**: Picocli operator commands over the existing submission, repository, queue, worker-registry, and DLQ abstractions. A shared lazy context owns the Redis client lifecycle.
+1. **Domain (`job`, `payload`)** — immutable Jobs, lifecycle states, priority, scheduled timestamp, retry data, and payload.
+2. **Serialization and persistence** — Jackson serialization, authoritative Job records, status indexes, and revision-based optimistic concurrency.
+3. **Queue and submission (`queue`)** — named Redis priority Sorted Sets, FIFO tie-breaking for equal priorities, legacy active List migration, atomic submission, and JobId-only queue operations.
+4. **Scheduling (`schedule`)** — durable JobId schedule indexes, destination routing, and bounded atomic release to priority queues.
+5. **Worker and execution (`worker`, `executor`)** — queue acquisition, registered execution, lifecycle, heartbeat, and bounded processing.
+6. **Retry and failure (`retry`)** — retry policy, existing in-memory Worker retry delays, Redis DLQ, and manual requeue.
+7. **CLI (`cli`)** — operator commands for job submission and inspection, queues, workers, and DLQ. It has no delay or priority submission flags.
 
-Scheduling and priority (Phase 8), metrics and HTTP API (Phase 9), and deployment/hardening (Phase 10) are not implemented.
+## Architecture flows
 
-## 2. Data and execution flow
+The persisted Job record remains authoritative. Queue and scheduler structures contain references and routing data; they do not contain competing serialized Job copies.
 
-The Job repository is authoritative (`JobId -> Job`); active and dead-letter Redis lists carry IDs only.
+### Immediate submission and execution
 
-1. A new Job starts `PENDING`.
-2. Queue submission persists `QUEUED` and adds its ID to the selected FIFO list using `MULTI`/`EXEC`.
-3. Worker acquisition polls with `dequeueNonBlocking()`. When empty, the acquisition loop waits 50 ms and retries. This lets `Worker.stop()` end acquisition without waiting for a Redis blocking dequeue.
-4. Worker loads the Job, verifies `QUEUED`, persists `PROCESSING`, then calls its registered executor.
-5. Success persists `COMPLETED`. Failure persists `FAILED` and `failure.reason`, then Phase 6 evaluates retry policy.
-6. For a permitted retry, Worker persists `RETRYING` and schedules a task on its separate in-memory retry scheduler. The processing thread does not wait for the delay. When due, the task verifies the Job remains `RETRYING`, persists `QUEUED`, and enqueues its ID.
-7. If retry is unavailable or exhausted, the Job is persisted as `DEAD` and its ID is placed on `jobstream:queue:dead-letter`.
-8. Manual DLQ requeue uses Redis `MULTI`/`EXEC` to remove the dead-list reference, reset retry count, persist `QUEUED`, update status indexes, and enqueue the ID to the requested queue.
+```text
+Job (PENDING)
+  -> QueueCoordinator.submit
+  -> revision-aware RedisJobSubmissionStore Lua script
+       -> authoritative Job record (QUEUED, incremented revision)
+       -> status indexes
+       -> named priority queue ZSET + membership Hash
+  -> Worker acquires JobId through JobQueue
+  -> JobRepository loads authoritative Job
+  -> Worker persists PROCESSING and executes
+```
 
-## 3. Retry and phase boundary
+The priority queue score is negative numeric priority. A fixed-width Redis Stream ID in each member provides FIFO ordering among equal priorities. The membership Hash prevents duplicate JobId entries. The submission operation returns the persisted queued Job snapshot, including its incremented revision.
 
-`maxRetries` counts retries after the initial execution. `maxRetries=2` permits at most three executions. `Job` persists retry count, configured limit, last error, and failure timestamp; Jackson serialization retains these fields through Redis reload.
+### Durable scheduling and release
 
-Phase 6 delayed retries use Worker-local scheduled executor state. Pending delays are not durable across process restart, and Phase 6 does not support arbitrary long delays. Phase 8 owns persistent delayed scheduling with Redis Sorted Sets (ZSET) and durable next-run timestamps.
+```text
+JobScheduler
+  -> delayed Sorted Set (JobId, epoch-millisecond due score)
+  -> target Hash (JobId, queue name)
+  -> SchedulerPoller.pollOnce(batchSize)
+  -> per-Job atomic release script
+       -> authoritative Job status/revision + status indexes
+       -> remove delayed ZSET and target Hash entries
+       -> insert JobId in target priority queue + membership Hash
+  -> Worker acquires JobId and loads the authoritative Job
+```
 
-## 4. Worker and Redis lifecycle
+Scheduler indexes store JobIds and queue names only. The full scheduled `Instant` and other Job fields remain in the authoritative Job record. The poller uses an injected Clock and persistent rotating cursor. Its Lua release operation coordinates Job compare-and-set, lifecycle/status-index changes, scheduler cleanup, and queue membership atomically for each Job. Polling does not execute Jobs and is not automatically started by production bootstrap code.
 
-Worker owns separate acquisition, processing, heartbeat, and retry executors. Idle acquisition uses a 50 ms wait; retry delay is handled by the retry scheduler, not by sleeping a processing thread. Shutdown stops acquisition, drains/interrupts processing within configured bounds, stops schedulers, and deregisters the Worker.
+## Revision concurrency
 
-Redis `MULTI` transactions in `RedisJobSubmissionStore`, `RedisWorkerRegistry`, and `RedisDeadLetterQueue` use try-with-resources, releasing transaction resources on completion or failure. Redis clients are injected and owned by their creator.
+New Jobs have revision zero. Legacy serialized records without a revision are read as revision zero. Job writers compare revisions atomically and reject stale snapshots. Repository save and queue submission return their persisted snapshots; scheduler and dead-letter operations also preserve newer fields by checking the current record before writing. This protects priority, scheduledAt, retry fields, payload, metadata, and status from stale overwrites.
 
-## 5. Package map and future work
+## Retry boundary
 
-Implemented packages include `job`, `payload`, `serialization`, `persistence`, `queue`, `worker`, `executor`, `retry`, and `cli`. The CLI is an application/interface layer over the established domain and infrastructure abstractions; it does not replace them. Future package responsibilities are scheduling and priority (Phase 8), metrics and API (Phase 9), and deployment/configuration hardening (Phase 10). See [project structure](project-structure.md), [job lifecycle](job-lifecycle.md), and the [Phase 7 CLI guide](../versions/v7-cli/README.md).
+The current Worker retry path persists `RETRYING` and stores its timer in a Worker-local scheduled executor. That timer is not durable across process restart. Although `RedisJobScheduler` and `RedisSchedulerPoller` support durable delayed Jobs, Worker retry backoff is not connected to them. Manual DLQ operations are implemented independently.
+
+## Phase 8 deferred integrations
+
+1. Connecting Worker retry backoff to `RedisJobScheduler`.
+2. Adding delayed and priority submission flags to the CLI.
+3. Production runtime bootstrap and automatic poller lifecycle management.
+
+See [project structure](project-structure.md), [job lifecycle](job-lifecycle.md), the [Phase 8 guide](../versions/v8-scheduling-and-priority/README.md), [ADR-010](../decisions/ADR-010-numeric-priority-queue.md), and [ADR-011](../decisions/ADR-011-durable-job-scheduling.md).

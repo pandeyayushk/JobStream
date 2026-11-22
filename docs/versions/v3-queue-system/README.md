@@ -1,5 +1,7 @@
 # Phase 3 — Queue System
 
+> Historical implementation note: this guide documents the original FIFO Redis List implementation. Phase 8 migrates that List as a legacy source into the active priority Sorted Set. See the [Phase 8 guide](../v8-scheduling-and-priority/README.md) for current queue behavior.
+
 ## Objective and Result
 
 Phase 3 is complete. It provides a Redis-backed FIFO queue of `JobId` references and an atomic Redis submission path that persists a job as `QUEUED` while placing its ID on a named queue.

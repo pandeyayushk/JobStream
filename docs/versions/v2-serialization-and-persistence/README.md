@@ -1,5 +1,7 @@
 # Phase 2 - Serialization & Persistence
 
+> Historical implementation note: this guide describes the original persistence implementation. Phase 8 added revision-checked atomic Job and status-index writes. See [current persistence requirements](../../requirements/persistence.md) and [ADR-011](../../decisions/ADR-011-durable-job-scheduling.md).
+
 ## 1. Objective
 
 Establish the JSON serialization boundary and Redis persistence layer. Jobs can be serialized, stored, retrieved, and deserialized with their `JobId`, type, status, payload, timestamps, and metadata preserved.

@@ -10,7 +10,7 @@ The project is being built incrementally, phase by phase, with thorough document
 
 ## Current Status
 
-**Phase 7 - CLI** (complete)
+**Phase 8 - Scheduling & Priority infrastructure** (complete)
 
 - Maven project: `io.github.pandeyayushk:jobstream:1.0-SNAPSHOT`
 - Java 21 LTS, Maven, JUnit 5
@@ -18,8 +18,12 @@ The project is being built incrementally, phase by phase, with thorough document
 - Domain model: `JobId`, `JobStatus`, `Payload`, and `Job`
 - JSON serialization via Jackson Databind 3.2.2, without Jackson annotations on domain classes
 - Redis persistence via Jedis 8.0.1 `RedisClient`, with authoritative job records and secondary status indexes
-- Redis FIFO queueing via `JobQueue` and `RedisJobQueue`; Worker acquisition uses non-blocking `RPOP` polling with a short idle wait
-- Atomic queue submission through `QueueCoordinator` and `RedisJobSubmissionStore`, using Redis `MULTI`/`EXEC`
+- Numeric priority queueing via `JobQueue`, `RedisJobQueue`, and `RedisPriorityQueueStore`; Redis Sorted Sets order higher integer priorities first, with FIFO order for equal priorities
+- Durable delayed scheduling via `JobScheduler` and `RedisJobScheduler`; scheduler indexes store JobIds and destination queue names while Job records remain authoritative
+- Bounded `SchedulerPoller.pollOnce(batchSize)` with injected Clock, atomic per-Job release, revision updates, and a persistent rotating cursor
+- Revision-based optimistic concurrency for Job writes; stale snapshots are rejected and repository/submission operations return persisted Job snapshots
+- Legacy active queue Lists migrate to the priority ZSET on first queue use; the dead-letter queue remains a Redis List
+- Atomic queue submission through `QueueCoordinator` and `RedisJobSubmissionStore`, using Redis Lua compare-and-set
 - Worker lifecycle, registry, TTL heartbeat, graceful shutdown, and bounded concurrent processing
 - Type-based execution through `ExecutorRegistry` and `JobExecutor`, with `ExecutionResult` outcomes persisted by Worker
 - Retry policies: no retry, fixed delay, and exponential backoff with jitter
@@ -28,7 +32,7 @@ The project is being built incrementally, phase by phase, with thorough document
 - Redis Dead-Letter Queue (DLQ), failure handling, inspection, purge, and manual requeue
 - Picocli command-line interface for job submission/status, queue inspection, worker listing, and DLQ operations
 
-Phases 0-7 are complete. Scheduling/priority (Phase 8), observability/API (Phase 9), and deployment/hardening (Phase 10) remain planned.
+Phases 0-8 infrastructure are complete. Phase 8 integrations that connect Worker retry backoff, CLI scheduling options, and production poller lifecycle remain deferred. Observability/API (Phase 9) and deployment/hardening (Phase 10) are planned.
 
 ## Technology Stack
 
@@ -39,7 +43,7 @@ Phases 0-7 are complete. Scheduling/priority (Phase 8), observability/API (Phase
 | Testing | JUnit 5 |
 | Serialization | Jackson Databind 3.2.2 |
 | Persistence | Redis via Jedis 8.0.1 |
-| Queue Backend | Redis Lists via Jedis 8.0.1 |
+| Queue Backend | Redis Sorted Sets for priority queues; Redis Lists for legacy queue migration and the DLQ |
 
 ## Requirements
 
@@ -102,6 +106,7 @@ JobStream uses a structured documentation system to guide development:
 - [Job Lifecycle](docs/architecture/job-lifecycle.md) - Job states and transitions
 - [Phase 6 Reliability & Retry](docs/versions/v6-reliability-and-retry/README.md) - Implemented retry and DLQ behavior
 - [Phase 7 CLI](docs/versions/v7-cli/README.md) - Implemented Picocli operational commands
+- [Phase 8 Scheduling & Priority](docs/versions/v8-scheduling-and-priority/README.md) - Implemented priority queue and durable scheduler infrastructure, with integrations still deferred
 - [ADR Index](docs/decisions/README.md) - Architecture decision records
 
 ## Development Roadmap
@@ -116,11 +121,11 @@ JobStream uses a structured documentation system to guide development:
 | 5 | Execution Engine | Complete |
 | 6 | Reliability & Retry | Complete |
 | 7 | CLI | Complete |
-| 8 | Scheduling & Priority | Planned |
+| 8 | Scheduling & Priority Infrastructure | Complete |
 | 9 | Observability & HTTP API | Planned |
 | 10 | Deployment & Hardening | Planned |
 
-Each phase has a detailed guide in `docs/versions/`. See those guides for prerequisites, requirements, file manifests, and validation criteria.
+Phase 8's Worker retry integration, CLI scheduling flags, and production scheduler bootstrap remain deferred. Each phase has a guide in `docs/versions/`; completed guides describe the implemented scope and deferred integrations.
 
 ## Development Philosophy
 
