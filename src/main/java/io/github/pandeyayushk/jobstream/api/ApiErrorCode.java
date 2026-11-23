@@ -5,6 +5,7 @@ public enum ApiErrorCode {
     VALIDATION_ERROR(400, "Request validation failed"),
     REQUEST_TOO_LARGE(413, "Request body exceeds the configured size limit"),
     NOT_FOUND(404, "Resource not found"),
+    METHOD_NOT_ALLOWED(405, "HTTP method not allowed"),
     CONFLICT(409, "Request conflicts with the current resource state"),
     SERVICE_UNAVAILABLE(503, "A required service is unavailable"),
     INTERNAL_ERROR(500, "An internal error occurred");

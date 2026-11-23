@@ -23,6 +23,10 @@ public final class ApiException extends RuntimeException {
         return new ApiException(ApiErrorCode.NOT_FOUND, null);
     }
 
+    public static ApiException methodNotAllowed() {
+        return new ApiException(ApiErrorCode.METHOD_NOT_ALLOWED, null);
+    }
+
     public static ApiException conflict() {
         return new ApiException(ApiErrorCode.CONFLICT, null);
     }

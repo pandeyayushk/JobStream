@@ -31,8 +31,13 @@ class ApiConfigTest {
 
     @Test
     void rejectsPortsOutsideTcpRange() {
-        assertThrows(IllegalArgumentException.class, () -> configWithPort(0));
+        assertThrows(IllegalArgumentException.class, () -> configWithPort(-1));
         assertThrows(IllegalArgumentException.class, () -> configWithPort(65536));
+    }
+
+    @Test
+    void acceptsPortZeroForEphemeralBinding() {
+        assertEquals(0, configWithPort(0).port());
     }
 
     @Test

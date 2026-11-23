@@ -3,7 +3,7 @@ package io.github.pandeyayushk.jobstream.config;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 
-/** Immutable configuration for the future embedded HTTP API. */
+/** Immutable configuration for the embedded HTTP API. */
 public record ApiConfig(
         String bindAddress,
         int port,
@@ -30,9 +30,9 @@ public record ApiConfig(
             throw new IllegalArgumentException("Bind address is invalid", e);
         }
 
-        if (port < 1 || port > 65535) {
+        if (port < 0 || port > 65535) {
             throw new IllegalArgumentException(
-                    "Port must be between 1 and 65535"
+                    "Port must be between 0 and 65535"
             );
         }
         if (maxRequestBodyBytes <= 0) {
