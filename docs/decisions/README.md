@@ -36,5 +36,11 @@ Each ADR should follow this structure:
 - [ADR-010: Numeric Priority Queue Ordering](ADR-010-numeric-priority-queue.md) — Accepted; implemented in Phase 8, Step 2
 - [ADR-011: Durable Redis Job Scheduling](ADR-011-durable-job-scheduling.md) — Accepted; implemented in Phase 8, Steps 3–4
 
+## Phase 9 Decisions
+- [ADR-012: JDK HTTP Server for Phase 9](ADR-012-jdk-http-server.md) — Accepted for Phase 9 implementation
+- [ADR-013: Process-Local Operational Metrics](ADR-013-process-local-metrics.md) — Accepted for Phase 9 implementation
+- [ADR-014: Redis Queue Registry](ADR-014-redis-queue-registry.md) — Accepted for Phase 9 implementation
+
 ## Rule of Thumb
+
 Trivial decisions don't need ADRs. ADRs are for decisions that affect system architecture, are hard to reverse, or have significant trade-offs.

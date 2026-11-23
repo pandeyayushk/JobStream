@@ -1,250 +1,101 @@
 # Phase 9 — Observability & HTTP API
 
-## 1. Objective
+**Status: Specification finalized; implementation has not started.** This document separates existing capabilities from planned Phase 9 work and deferred integrations.
 
-Provide production observability (counters, gauges, throughput statistics) and an embedded lightweight RESTful HTTP API allowing external systems, dashboards, and automated tools to manage jobs, inspect queues, check worker health, and retrieve metrics.
+## Existing capabilities and constraints
 
-## 2. Why This Phase Exists
+Phase 8 provides revision-aware Job persistence and submission, numeric priority queues, durable scheduling, and a bounded scheduler poller. Worker retry backoff remains in-memory and is not connected to `RedisJobScheduler`; the CLI has no priority or delayed-submission flags; and scheduler-poller production bootstrap/lifecycle management is absent. These integrations are outside Phase 9.
 
-Phase 7 provides an interactive CLI for human operators. This phase will add the programmatic interfaces and observability needed by production architectures:
-- Programmatic machine-to-machine HTTP interfaces (e.g., submitting jobs from Python, Go, Node.js, or frontend services).
-- System health endpoints (`/health`, `/metrics`) for uptime probes (Kubernetes liveness/readiness, Prometheus monitoring).
-- Aggregated real-time metrics (throughput, error rates, queue latency, active workers) to understand system performance and detect bottlenecks.
+Existing interfaces: `JobRepository` supports lookup/save/status queries; `QueueCoordinator.submit` returns the committed queued snapshot; `JobQueue` operates on a supplied queue name but cannot enumerate names; `DeadLetterQueue` supports paginated listing and requeue; `WorkerRegistry` provides Redis-backed registration and `listActiveWorkers`; `JobScheduler` and `SchedulerPoller` provide storage and bounded release without runtime wiring.
 
-**Depends on:**
-- Phase 1–8 (all core domain, queue, worker, retry, scheduler components)
+`RedisWorkerRegistry` stores worker ID, status, and `startedAt` in a Redis Hash. A separate heartbeat key has a TTL refreshed by heartbeat calls. Listing filters records by heartbeat-key existence. No last-heartbeat timestamp or processing/idle state is stored or exposed.
 
-## 3. Scope
+## HTTP framework decision
 
-**In scope:**
-- Embedded lightweight HTTP server (evaluating `Javalin` vs `Sun HttpServer`)
-- Metrics subsystem in `io.github.pandeyayushk.jobstream.metrics`:
-  - `JobMetrics` collecting counters (submitted, completed, failed, retried, dead)
-  - Queue depth and latency gauges
-- REST endpoints:
-  - `GET /health` — Liveness & readiness check (Redis connectivity)
-  - `GET /metrics` — JSON / Prometheus metrics summary
-  - `POST /api/v1/jobs` — Submit a job
-  - `GET /api/v1/jobs/{id}` — Query job details
-  - `GET /api/v1/queues` — List queues and current sizes
-  - `GET /api/v1/workers` — List active registered workers and heartbeats
-  - `GET /api/v1/dlq` — Query dead-letter jobs
-  - `POST /api/v1/dlq/{id}/requeue` — Requeue dead job
-- Structured JSON error responses (`{ "error": "...", "code": 404 }`)
+Use Java 21's `com.sun.net.httpserver.HttpServer` (`jdk.httpserver`) for the embedded operator API. It adds no Maven dependency and works with the existing Jackson 3.2.2 `ObjectMapper`. Use a bounded executor, explicit route dispatch, shared JSON/error helpers, request-size limits, and an `AutoCloseable` lifecycle. Integration tests use the JDK `HttpClient` against an ephemeral loopback port.
 
-**Out of scope:**
-- Full OAuth2 / JWT authentication server (deferred or pluggable reverse-proxy concern)
-- Container packaging and Docker Compose (Phase 10)
+Javalin 7.2.4 is actively released and requires Java 17+, so it is Java 21 compatible. Jackson 2 (`com.fasterxml.jackson`) and Jackson 3 (`tools.jackson`) are distinct and not binary compatible, but Javalin 7.2.0+ provides an optional native `JavalinJackson3` mapper. With Javalin, configure that mapper explicitly and depend on the Jackson 3 artifacts; do not use `javalin-bundle` if its Jackson 2 defaults are unwanted. Javalin's core Jackson dependencies are optional, while Jetty runtime dependencies are required. Javalin therefore can use the existing mapper generation without a custom adapter, at the cost of Jetty and the framework. Its routing, validation, and exception mapping are useful; for this small fixed route set, the JDK server still has the lower footprint and no extra dependency. Revisit if API needs grow.
 
-## 4. Prerequisites
+Version support caveat: the project currently pins Jackson 3.2.2. As of the Phase 9 specification date, the Jackson 3.2 branch is closed; 3.3 is the active release branch and 3.1 is the LTS branch. Phase 9 implementation should first select and pin a supported Jackson 3 line (prefer the 3.1 LTS line unless the project explicitly chooses current-release features), then use that same line in serialization and HTTP handling. Javalin 7.2.4's Jackson 3 mapper is optional, so Maven resolution must be checked against the chosen pin.
 
-- Phase 8 scheduling and priority infrastructure complete; Worker retry, CLI scheduling flags, and automatic scheduler bootstrap remain deferred
-- Redis instance running
-- Understanding of REST principles and HTTP status codes (200, 201, 400, 404, 500)
+## Metrics architecture and semantics
 
-## 5. Read Before Starting
+Use process-local thread-safe counters (for example, `LongAdder`) behind `JobMetrics`. Values reset at restart and are per process, not cluster-wide or durable. Instrument only after the durable operation succeeds:
 
-- `docs/requirements/observability.md` — Metrics and observability specifications
-- `docs/requirements/http-api.md` — HTTP API specifications
-- `docs/architecture/project-structure.md` — Packages `metrics` and `api`
-- `docs/architecture/system-overview.md` — API placement in system architecture
+| Counter | Increment point | Meaning |
+|---|---|---|
+| `jobs_submitted_total` | `QueueCoordinator.submit` returns committed snapshot | Successful immediate submission; conflicts/failures do not count. |
+| `jobs_completed_total` | Worker successfully saves `COMPLETED` | Successfully completed Jobs. |
+| `jobs_failed_total` | Worker successfully saves `FAILED` after execution attempt | Failed attempts, including retryable ones; not terminally failed unique Jobs. |
+| `jobs_retried_total` | Worker successfully saves `RETRYING` | Accepted retry decisions; queue requeue does not increment again. |
+| `jobs_moved_to_dlq_total` | DLQ move succeeds | Successful moves; listing and requeueing out do not count. |
 
-## 6. Concepts to Understand
+A retry intentionally contributes one failed attempt and one retry decision, not another submission. Metrics are best effort: process crash between job persistence and local increment can omit an event. These are not audit or billing records. Recording must be non-throwing and cannot fail job processing. Redis-backed counters would aggregate instances but add hot-path Redis coupling and still diverge from Job writes unless lifecycle scripts were expanded; hybrid counters add unnecessary duplicate semantics.
 
-- **Embedded HTTP Servers:** Running an HTTP daemon inside the Java process without needing an external servlet container like Tomcat.
-  - Recommended: [Javalin](https://javalin.io/) (lightweight, micro-framework built on Jetty, excellent Java 21 support).
-- **Meters, Counters, and Gauges:**
-  - Counter: Monotonically increasing number (e.g. `jobs_completed_total`).
-  - Gauge: Instantaneous reading (e.g. `queue_depth`, `active_workers`).
-- **RESTful Resource Modeling:** Nouns for collections (`/jobs`, `/workers`), proper verb usage (POST to create, GET to retrieve).
-- **Health Check Probes:** Distinguishing liveness (is process running?) from readiness (can process reach Redis?).
+Gauges are read on request: per-queue/total depth via `JobQueue.size` for registered names, active registration count via `WorkerRegistry.listActiveWorkers`. Processing/idle gauges are unavailable. Execution and queue-wait latency are out of scope: no per-attempt timestamps or `queuedAt` exist, and `updatedAt` is overwritten at transitions. Do not infer latency from `createdAt` or `updatedAt`.
 
-## 7. Design Decisions
+`GET /metrics` returns JSON counters and gauges. Gauge reads need Redis; on failure return 503 rather than a misleading partial snapshot. Counter recording does not need Redis.
 
-### 7.1 HTTP Framework Selection
+## Queue discovery
 
-**What to decide:** Which library to embed for HTTP API?
+Add Redis Set `jobstream:queues` and `QueueRegistry`. Every priority-queue insertion registers its queue name with `SADD` in the same Lua operation, including atomic submit, poller release, direct enqueue/requeue, legacy migration, and DLQ requeue. Concurrent registration is idempotent. Dequeue retains the name when depth reaches zero. A one-time cursor-based `SCAN` backfill registers pre-existing priority queue keys and legacy active-queue List keys, excluding the DLQ key `jobstream:queue:dead-letter`. SCAN is not a snapshot; concurrent new writes are covered by atomic registration. Do not use `KEYS` in request paths or automatically remove queue names in Phase 9.
 
-**Options:**
-- JDK built-in `com.sun.net.httpserver`: Zero dependencies, but primitive routing, no native JSON handling, verbose boilerplate.
-- Spring Boot: Full enterprise stack, but massive footprint, heavy reflection, and violates learning/lightweight philosophy.
-- Javalin: Lightweight (~5MB), fluent routing, native Jackson integration, fast startup, simple to test.
+## Worker inspection
 
-**Recommendation:** Use `io.javalin:javalin:6.1.3` with Jackson.
+`GET /api/v1/workers` returns worker ID, stored `WorkerStatus`, and `startedAt` from `listActiveWorkers`. “Active” means its heartbeat key existed at lookup; expiry can race immediately after the read. The API cannot claim a worker is executing or healthy and cannot return last heartbeat time or processing/idle state without extending the registry and heartbeat writes.
 
-**Record this decision in:** ADR-011 (to be created during this phase).
+## Health
 
-### 7.2 Metrics Aggregation Strategy
+- `GET /health/live`: 200 `{"status":"UP"}` if the HTTP process can respond; no Redis call.
+- `GET /health/ready`: Redis `PING`; 200 `{"status":"UP","dependencies":{"redis":"UP"}}`; 503 with Redis DOWN on failure. Catch Redis errors so the server remains alive.
+- No `/health` alias; liveness and readiness are intentionally distinct.
 
-**What to decide:** In-memory counters vs Redis-backed metrics?
+## API contract
 
-**Recommendation:**
-- Redis counters (`INCR jobstream:metrics:completed`) for distributed aggregate statistics across all nodes.
-- Local in-memory meters for worker-level processing rates.
-- Expose combined statistics at `/metrics`.
+Success bodies are JSON. Errors use `{"error":{"code":"...","message":"..."}}`; never expose stack traces, internal exception text, Redis addresses, or credentials.
 
-**Record this decision in:** ADR-011.
+| Endpoint | Request | Response/status | Rules and dependencies |
+|---|---|---|---|
+| `GET /health/live` | none | 200 | Process only; Redis independent. |
+| `GET /health/ready` | none | 200/503 | Redis PING. |
+| `GET /metrics` | none | 200/503 | Process counters plus Redis gauges; no partial success on gauge failure. |
+| `POST /api/v1/jobs` | `{ "type": string, "payload": object, "queue": string, "priority": integer? }` | 201 committed queued Job and `Location` | Required nonblank type/queue and valid object payload; priority defaults 0 and fits Java int. Immediate submission only; no delay/schedule field. Uses `QueueCoordinator.submit`. |
+| `GET /api/v1/jobs/{id}` | UUID | 200 Job / 404 | Invalid UUID 400; `JobRepository`. |
+| `GET /api/v1/queues` | none | 200 `{"queues":[{"name":"...","depth":0}]}` | Lexical name order. New `QueueRegistry` plus `JobQueue.size`. |
+| `GET /api/v1/workers` | none | 200 `{"workers":[{"id":"...","status":"RUNNING","startedAt":"..."}]}` | `WorkerRegistry.listActiveWorkers`; heartbeat presence only, no processing state. |
+| `GET /api/v1/dlq?offset=0&limit=50` | offset >= 0; limit 1..100 | 200 paginated `jobs` | Uses `DeadLetterQueue.listDeadJobs`; invalid pagination 400. |
+| `POST /api/v1/dlq/{id}/requeue` | `{ "queue": string }` | 200 persisted queued Job | Uses `DeadLetterQueue.requeue`; malformed ID/blank queue 400, missing 404, state conflict 409 when distinguishable. |
 
-## 8. Requirements
+Common errors: malformed JSON, wrong content type, invalid field, UUID or pagination 400; unknown route/resource 404; known path wrong method 405; revision/state conflict 409; Redis unavailable 503; generic sanitized 500. Request bodies are limited to 1 MiB; larger bodies return 413. The server uses a bounded executor and clean start/stop lifecycle.
 
-### Functional Requirements
+Cancellation is excluded. `JobStatus` has no cancellation state, `JobQueue` cannot remove by ID, and Worker dequeue races with cancellation; CAS alone cannot coordinate these operations. Do not expose a fake cancellation endpoint.
 
-1. **`JobMetrics` Subsystem:**
-   - Methods: `recordSubmission()`, `recordCompletion(Duration duration)`, `recordFailure()`, `recordRetry()`, `recordDeadLetter()`.
-   - Thread-safe tracking backed by atomic Redis counters or concurrent aggregators.
+## Security boundary
 
-2. **HTTP Server Lifecycle (`JobStreamApiServer`):**
-   - Configurable port (default: 8080).
-   - Methods: `start()`, `stop()`.
-   - Clean shutdown hook integration.
+Bind to `127.0.0.1` by default; non-loopback bind requires explicit configuration. V1 has no built-in authentication. Remote use requires trusted private networking and an authenticated reverse proxy/firewall; the API is not safe for direct public exposure. Keep Redis credentials protected and never echo them. Require JSON content type, validate paths and inputs before Redis calls, constrain JSON parsing, cap body size at 1 MiB, and sanitize request/error logs.
 
-3. **REST Endpoints:**
-   - `GET /health`: Returns HTTP 200 `{"status": "UP", "redis": "CONNECTED"}` or HTTP 503 `{"status": "DOWN"}`.
-   - `GET /metrics`: Returns JSON object with totals and current queue depths.
-   - `POST /api/v1/jobs`: Body `{"type": "...", "payload": {...}, "priority": 1, "queue": "default"}` → Returns HTTP 201 with created `Job`.
-   - `GET /api/v1/jobs/{id}`: Returns HTTP 200 with `Job` or HTTP 404 if missing.
-   - `GET /api/v1/queues`: Returns array of queues with item count.
-   - `GET /api/v1/workers`: Returns list of workers from `WorkerRegistry`.
-   - `GET /api/v1/dlq`: Returns dead-letter jobs.
-   - `POST /api/v1/dlq/{id}/requeue`: Requeues job, returns HTTP 200.
-
-4. **Error Handling:**
-   - Standardized error payload: `{"error": "message", "status": 4xx}` with proper HTTP response code.
-
-### Non-Functional Requirements
-
-- Low latency (< 10ms for health check and metrics).
-- Thread-safe request handling via Javalin thread pool.
-
-## 9. File Change Manifest
-
-### CREATE
-
-```
-src/main/java/io/github/pandeyayushk/jobstream/metrics/JobMetrics.java
-src/main/java/io/github/pandeyayushk/jobstream/metrics/RedisJobMetrics.java
-src/main/java/io/github/pandeyayushk/jobstream/api/JobStreamApiServer.java
-src/main/java/io/github/pandeyayushk/jobstream/api/controller/JobController.java
-src/main/java/io/github/pandeyayushk/jobstream/api/controller/QueueController.java
-src/main/java/io/github/pandeyayushk/jobstream/api/controller/WorkerController.java
-src/main/java/io/github/pandeyayushk/jobstream/api/controller/DlqController.java
-src/main/java/io/github/pandeyayushk/jobstream/api/dto/JobSubmitRequest.java
-src/main/java/io/github/pandeyayushk/jobstream/api/dto/ErrorResponse.java
-src/test/java/io/github/pandeyayushk/jobstream/metrics/RedisJobMetricsTest.java
-src/test/java/io/github/pandeyayushk/jobstream/api/JobStreamApiServerTest.java
-```
-
-### MODIFY
+`RedisConfig` has an optional password field, but current `CliContext` wiring only accepts host/port and builds a credential-free Redis URI. Phase 9 connection wiring must explicitly honor configured credentials without logging or returning them; the existing field alone does not mean credentialed connections are currently configured.
 
-```
-pom.xml  — Add io.javalin:javalin:6.1.3
-src/main/java/io/github/pandeyayushk/jobstream/worker/Worker.java — Record completion/failure in JobMetrics
-```
+## Phase boundary
 
-### DELETE
-
-None.
+Phase 9 will implement HTTP lifecycle/routes, health, process-local counters, Redis gauges, queue registry/backfill, and job/queue/worker/DLQ endpoints with tests. Deferred: Worker retry-to-Redis scheduler integration; CLI priority/delay flags; production poller bootstrap; cancellation; latency metrics; Prometheus exposition; durable cluster-wide counters; worker heartbeat timestamps/processing counts; built-in auth/public exposure.
 
-### DO NOT TOUCH
+## Implementation sequence
 
-```
-src/main/java/.../serialization/*
-src/main/java/.../executor/*
-src/main/java/.../priority/*
-```
+1. Upgrade and pin Jackson to the selected supported Jackson 3 line; run existing serialization tests and inspect the resolved dependency tree.
+2. Define API configuration, DTO/error contract, loopback default, remote-bind opt-in, size/pagination limits.
+3. Implement `QueueRegistry` Redis Set; add atomic registration to every queue insertion Lua path and idempotent cursor-based SCAN backfill.
+4. Add process-local counters and instrument successful submit, completion, failed attempt, retry decision, and DLQ move boundaries. Enforce non-throwing metric recording.
+5. Add JDK HTTP server, bounded executor, lifecycle, routes, Jackson 3 JSON handling, errors, and health probes.
+6. Add job submit/read, queue/worker inspection, and DLQ list/requeue handlers.
+7. Add JSON metrics with Redis-backed gauge reads.
+8. Add counter, registry, real-Redis, and HTTP integration tests, including errors, Redis outage, limits, and shutdown.
+9. Review dependency tree, security boundaries, documentation, and Phase 8 deferred scope.
 
-## 10. Implementation Order
+## References
 
-1. **`pom.xml`** — Add Javalin dependency.
-2. **`JobMetrics.java`** & **`RedisJobMetrics.java`** — Metric collection contracts and Redis counters.
-3. **`RedisJobMetricsTest.java`** — Unit test metrics increments and retrieval.
-4. **`ErrorResponse.java`** & **`JobSubmitRequest.java`** — DTOs for API payloads.
-5. **Controllers (`JobController`, `QueueController`, `WorkerController`, `DlqController`)** — Request handlers mapping HTTP to domain operations.
-6. **`JobStreamApiServer.java`** — Routing, server configuration, and lifecycle.
-7. **`Worker.java`** — Wire metrics updates into the worker lifecycle.
-8. **`JobStreamApiServerTest.java`** — Integration test endpoints using HTTP client.
-
-## 11. Testing Requirements
-
-### Unit Tests
-- `RedisJobMetrics`: Verify metric counters increment correctly for submitted, completed, and failed jobs.
-
-### Integration Tests (HTTP Server)
-- Start `JobStreamApiServer` on random test port:
-  - `GET /health` returns 200 and `"status": "UP"`.
-  - `POST /api/v1/jobs` with valid JSON returns 201 and valid `jobId`.
-  - `GET /api/v1/jobs/{id}` returns the newly created job.
-  - `GET /api/v1/jobs/{non-existent-uuid}` returns 404 with formatted `ErrorResponse`.
-  - `GET /api/v1/queues` returns list with correct queue sizes.
-  - `GET /api/v1/workers` reflects currently registered test workers.
-  - `GET /metrics` shows incremented counters.
-
-## 12. Failure and Edge Cases
-
-- **Redis Unreachable during Health Check:** `/health` must return HTTP 503 Service Unavailable with `{"status": "DOWN"}` without crashing server.
-- **Port Conflict:** Provide clean error message if configured HTTP port is already bound.
-- **Malformed JSON in POST:** Return HTTP 400 Bad Request with explanation, not HTTP 500.
-
-## 13. Validation
-
-```powershell
-# Compile
-mvn compile
-
-# Run all test suites
-mvn test
-
-# Run API and Metrics tests
-mvn test -Dtest="io.github.pandeyayushk.jobstream.api.**,io.github.pandeyayushk.jobstream.metrics.**"
-
-# Manual verification using curl
-curl http://localhost:8080/health
-curl http://localhost:8080/metrics
-curl -X POST http://localhost:8080/api/v1/jobs -H "Content-Type: application/json" -d '{"type":"email:send","payload":{"recipient":"test@example.com"}}'
-```
-
-## 14. Completion Criteria
-
-- [ ] Javalin integrated cleanly.
-- [ ] `JobMetrics` accurately tracks system throughput and error counts.
-- [ ] `/health` endpoint reports Redis and system connectivity.
-- [ ] REST API endpoints for jobs, queues, workers, DLQ, and metrics are operational.
-- [ ] Proper HTTP status codes (200, 201, 400, 404, 503) and JSON error responses returned.
-- [ ] HTTP integration tests pass cleanly.
-
-## 15. Self-Review Checklist
-
-- [ ] Does `JobStreamApiServer.stop()` cleanly shut down the Jetty engine and release ports?
-- [ ] Are all API inputs validated before reaching domain layers?
-- [ ] Is sensitive information (Redis passwords, internal exceptions) stripped from HTTP responses?
-- [ ] Are all previous tests passing?
-
-## 16. Documentation Updates
-
-### Requirements documentation
-- Update `docs/requirements/observability.md` and `docs/requirements/http-api.md` with final endpoint specs.
-
-### Architecture documentation
-- Update `docs/architecture/project-structure.md` marking `metrics` and `api` active.
-
-### ADRs
-- **Create ADR-011:** Javalin HTTP server adoption and REST API architecture.
-
-### Final README Notes
-- Embedded REST API for job submission, queue inspection, worker monitoring, and DLQ management.
-- Standard health check and metrics endpoints for production monitoring.
-
-## 17. Git Milestone
-
-- **Branch:** `phase-9-observability-and-http-api`
-- **Base:** `master` (after Phase 8 merge)
-- **Implementation milestone:** `JobStreamApiServer`, controllers, and `JobMetrics` functional.
-- **Testing milestone:** All REST endpoints verified via integration test suite.
-- **Review milestone:** ADR-011 recorded, self-review complete.
-- **Merge condition:** Clean build and test execution on master.
-
-## 18. What This Phase Enables
-
-With observability and the HTTP API in place:
-- **Phase 10 (Deployment & Production Hardening)** can package JobStream into Docker containers with health checks, environment-driven configuration, and production readiness.
-- Any external language or dashboard can integrate with JobStream.
+- [JDK 21 `jdk.httpserver`](https://docs.oracle.com/en/java/javase/21/docs/api/jdk.httpserver/module-summary.html), [HttpServer API](https://docs.oracle.com/en/java/javase/21/docs/api/jdk.httpserver/com/sun/net/httpserver/HttpServer.html)
+- [Javalin documentation](https://javalin.io/documentation), [release history](https://github.com/javalin/javalin/releases)
+- [Jackson release support policy](https://github.com/FasterXML/jackson/wiki/Jackson-Releases)
+- [Observability requirements](../../requirements/observability.md), [HTTP API requirements](../../requirements/http-api.md)
+- [ADR-012](../../decisions/ADR-012-jdk-http-server.md), [ADR-013](../../decisions/ADR-013-process-local-metrics.md), [ADR-014](../../decisions/ADR-014-redis-queue-registry.md)

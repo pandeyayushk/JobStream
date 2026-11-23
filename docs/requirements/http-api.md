@@ -1,30 +1,48 @@
 # HTTP API Requirements
 
-## Purpose
-Provides a RESTful interface for external applications and dashboards to integrate with and manage the JobStream system.
+## Purpose and status
 
-## Functional Requirements
-- REST API for job management: submit, query, cancel.
-- REST API for queue inspection: list queues, queue depth.
-- REST API for worker inspection: list workers, worker status.
-- REST API for dead-letter management: list, re-enqueue, delete.
-- REST API for statistics: system-wide and per-queue metrics.
-- All endpoints must return JSON.
-- Error responses must include meaningful error codes and messages.
-- The API must support basic health check endpoint.
+Specify the Phase 9 operator and management API. The specification is finalized; implementation has not started. The first version uses JDK `com.sun.net.httpserver.HttpServer` and existing Jackson 3.2.2 serialization, with no HTTP framework dependency. See [ADR-012](../decisions/ADR-012-jdk-http-server.md).
 
-## Non-Functional Requirements
-- Low latency responses for standard queries.
-- Proper HTTP status codes for errors.
+## Common contract
 
-## Constraints
-- Must integrate cleanly with the underlying application state.
+- All successful API responses use JSON and `Content-Type: application/json`.
+- Errors use `{"error":{"code":"...","message":"..."}}`. Messages are sanitized; no stack traces, Redis addresses, credentials, or raw exception text.
+- Invalid request syntax/content, invalid UUID, invalid field, unsupported content type, and invalid pagination return 400.
+- Missing resources return 404; distinguishable state/revision conflicts return 409; unavailable Redis returns 503; unexpected internal failures return generic 500.
+- Unknown paths return 404. Known paths with unsupported methods return 405.
+- Request bodies are limited to 1 MiB; requests larger than the limit return 413. Validate before repository or Redis calls.
+- Bind to loopback (`127.0.0.1`) by default. Non-loopback binding requires explicit configuration. There is no built-in authentication in v1; remote deployment requires a trusted network and authenticated reverse proxy/firewall. The API is not for direct public exposure.
+- `RedisConfig` contains an optional password, but current `CliContext` constructs a credential-free Redis URI from host/port. API connection wiring must deliberately honor configured credentials; do not assume the existing field is already wired.
+- Use a bounded executor and explicit start/stop lifecycle. Redis outages must not terminate the HTTP process.
 
-## Design Questions
-- Deferred: HTTP framework choice, authentication.
+## Endpoints
 
-## Dependencies
-- Observability (Phase 9) for statistics
+| Method and path | Request | Response and status | Backing capability and rules |
+|---|---|---|---|
+| `GET /health/live` | None | 200 `{"status":"UP"}` | Process response only; must not contact Redis. |
+| `GET /health/ready` | None | 200 `{"status":"UP","dependencies":{"redis":"UP"}}`; 503 with DOWN when unavailable | Redis `PING`; catch failures without stopping the server. No `/health` alias. |
+| `GET /metrics` | None | 200 JSON counters and gauges; 503 on Redis gauge failure | Process-local counters plus queue-depth and active-worker reads. Never report partial data as complete. |
+| `POST /api/v1/jobs` | `{ "type": string, "payload": object, "queue": string, "priority": integer? }` | 201 committed queued Job snapshot and `Location` header | Uses `QueueCoordinator.submit`. Type/queue required and nonblank; payload must be valid object; priority defaults to 0 and fits Java `int`. No delay/scheduled field. |
+| `GET /api/v1/jobs/{id}` | UUID path segment | 200 Job or 404 | Uses `JobRepository.findById`; malformed UUID is 400. |
+| `GET /api/v1/queues` | None | 200 `{"queues":[{"name":"...","depth":0}]}` sorted by name | Requires new `QueueRegistry`; computes depth with `JobQueue.size`. Redis failure is 503. |
+| `GET /api/v1/workers` | None | 200 `{"workers":[{"id":"...","status":"RUNNING","startedAt":"..."}]}` | Uses `WorkerRegistry.listActiveWorkers`. Active means heartbeat key existed at lookup, not execution or health. No heartbeat timestamp or processing state. |
+| `GET /api/v1/dlq?offset=0&limit=50` | Optional offset >= 0 and limit 1..100 | 200 `{"jobs":[...],"offset":0,"limit":50}` | Uses `DeadLetterQueue.listDeadJobs`. Invalid pagination is 400. |
+| `POST /api/v1/dlq/{id}/requeue` | `{ "queue": "..." }` | 200 persisted queued Job snapshot | Uses `DeadLetterQueue.requeue`; invalid ID/blank queue 400; missing 404; state conflict 409 when distinguishable. |
 
-## Phase Ownership
-- Phase 9 (Observability & API)
+Redis unavailability for repository, registry, queue, or DLQ calls returns 503. Malformed stored data returns a sanitized error. No `/health` alias is retained because liveness and readiness have different dependencies.
+
+## Queue discovery
+
+`JobQueue` supports named queue operations but not enumeration. Add `QueueRegistry` backed by Redis Set `jobstream:queues`. Every operation that inserts a queue member registers its name via `SADD` in the same Lua operation. Registration is idempotent and names remain registered when depth reaches zero. Run an idempotent cursor-based Redis `SCAN` backfill for pre-existing priority queue keys and legacy active-queue Lists, excluding `jobstream:queue:dead-letter`. Do not use `KEYS`; do not remove names automatically in Phase 9.
+
+## Cancellation
+
+There is no cancellation endpoint. The lifecycle has no cancellation state, `JobQueue` has no remove-by-ID operation, and dequeue races with cancellation. Safe cancellation requires lifecycle and acquisition coordination beyond this API increment.
+
+## Explicit exclusions
+
+- No delayed or recurring submission endpoint. Worker retry backoff remains in-memory; durable retry integration and scheduler poller production bootstrap are deferred Phase 8 work.
+- No CLI priority/delay flags.
+- No purge/delete DLQ endpoint, queue mutation endpoint, or fake cancellation operation.
+- No built-in authentication, public exposure, Prometheus format, or latency claims.
