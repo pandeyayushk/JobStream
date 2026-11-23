@@ -69,6 +69,7 @@ class PriorityWorkerIntegrationTest {
                 RedisPriorityQueueStore.sequenceKey(queueName),
                 RedisPriorityQueueStore.membersKey(queueName)
         );
+        client.srem(RedisPriorityQueueStore.queueRegistryKey(), queueName);
         for (JobId jobId : jobIds) {
             client.del("jobstream:job:" + jobId);
             for (JobStatus status : JobStatus.values()) {

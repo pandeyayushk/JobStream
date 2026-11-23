@@ -29,11 +29,13 @@ public class RedisJobSubmissionStore implements JobSubmissionStore {
             local sequenceType = redis.call('TYPE', KEYS[3]).ok
             local queueType = redis.call('TYPE', KEYS[4]).ok
             local membersType = redis.call('TYPE', KEYS[5]).ok
+            local registryType = redis.call('TYPE', KEYS[6]).ok
             if (oldStatusType ~= 'none' and oldStatusType ~= 'set') or
                (newStatusType ~= 'none' and newStatusType ~= 'set') or
                (sequenceType ~= 'none' and sequenceType ~= 'stream') or
                (queueType ~= 'none' and queueType ~= 'zset') or
-               (membersType ~= 'none' and membersType ~= 'hash') then return -2 end
+               (membersType ~= 'none' and membersType ~= 'hash') or
+               (registryType ~= 'none' and registryType ~= 'set') then return -2 end
 
             redis.call('SET', KEYS[1], ARGV[1])
             redis.call('SREM', oldStatusKey, ARGV[2])
@@ -51,6 +53,7 @@ public class RedisJobSubmissionStore implements JobSubmissionStore {
                 redis.call('ZADD', KEYS[4], -tonumber(ARGV[4]), member)
                 redis.call('HSET', KEYS[5], jobId, member)
             end
+            redis.call('SADD', KEYS[6], ARGV[6])
             return 1
             """;
 
@@ -90,14 +93,16 @@ public class RedisJobSubmissionStore implements JobSubmissionStore {
                             queuedStatusKey,
                             RedisPriorityQueueStore.sequenceKey(queueName),
                             RedisPriorityQueueStore.queueKey(queueName),
-                            RedisPriorityQueueStore.membersKey(queueName)
+                            RedisPriorityQueueStore.membersKey(queueName),
+                            RedisQueueRegistry.REDIS_KEY
                     ),
                     List.of(
                             json,
                             queuedJob.id().toString(),
                             Long.toString(originalJob.revision()),
                             Integer.toString(queuedJob.priority()),
-                            originalJob.status().name()
+                            originalJob.status().name(),
+                            queueName
                     )
             );
             // The script checks the revision and all types before mutation.

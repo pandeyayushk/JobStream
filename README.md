@@ -32,7 +32,7 @@ The project is being built incrementally, phase by phase, with thorough document
 - Redis Dead-Letter Queue (DLQ), failure handling, inspection, purge, and manual requeue
 - Picocli command-line interface for job submission/status, queue inspection, worker listing, and DLQ operations
 
-Phases 0-8 infrastructure are complete. Phase 8 integrations that connect Worker retry backoff, CLI scheduling options, and production poller lifecycle remain deferred. Observability/API (Phase 9) and deployment/hardening (Phase 10) are planned.
+Phases 0-8 infrastructure are complete. Phase 9 is in progress: the JDK HTTP server with live/ready health checks and Redis queue registry/backfill are implemented; metrics and management endpoints remain pending. Phase 8 integrations that connect Worker retry backoff, CLI scheduling options, and production poller lifecycle remain deferred. Deployment/hardening (Phase 10) is planned.
 
 ## Technology Stack
 
@@ -43,7 +43,8 @@ Phases 0-8 infrastructure are complete. Phase 8 integrations that connect Worker
 | Testing | JUnit 5 |
 | Serialization | Jackson Databind 3.3.0 |
 | Persistence | Redis via Jedis 8.0.1 |
-| Queue Backend | Redis Sorted Sets for priority queues; Redis Lists for legacy queue migration and the DLQ |
+| HTTP server | JDK `com.sun.net.httpserver.HttpServer` |
+| Queue Backend | Redis Sorted Sets for priority queues; Redis Set for queue-name registry; Redis Lists for legacy queue migration and the DLQ |
 
 ## Requirements
 

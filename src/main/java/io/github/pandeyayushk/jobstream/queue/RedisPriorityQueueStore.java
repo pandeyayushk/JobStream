@@ -17,15 +17,18 @@ public final class RedisPriorityQueueStore {
             local queue = KEYS[2]
             local sequence = KEYS[3]
             local members = KEYS[4]
+            local registry = KEYS[5]
             local keyType = redis.call('TYPE', legacy).ok
             if keyType == 'none' then return 0 end
             if keyType ~= 'list' then return redis.error_reply('Legacy queue key is not a list') end
             local queueType = redis.call('TYPE', queue).ok
             local sequenceType = redis.call('TYPE', sequence).ok
             local membersType = redis.call('TYPE', members).ok
+            local registryType = redis.call('TYPE', registry).ok
             if (queueType ~= 'none' and queueType ~= 'zset') or
                (sequenceType ~= 'none' and sequenceType ~= 'stream') or
-               (membersType ~= 'none' and membersType ~= 'hash') then
+               (membersType ~= 'none' and membersType ~= 'hash') or
+               (registryType ~= 'none' and registryType ~= 'set') then
                 return redis.error_reply('Priority queue keys have incompatible data types')
             end
 
@@ -46,6 +49,7 @@ public final class RedisPriorityQueueStore {
                     return redis.error_reply('Job record has an incompatible data type')
                 end
             end
+            redis.call('SADD', registry, ARGV[1])
             for index = #oldIds, 1, -1 do
                 local jobId = oldIds[index]
                 if redis.call('HEXISTS', members, jobId) == 0 then
@@ -67,7 +71,8 @@ public final class RedisPriorityQueueStore {
             """;
 
     private static final String ENQUEUE_FUNCTION = """
-            local function enqueuePriority(sequence, queue, members, jobId, priority)
+            local function enqueuePriority(sequence, queue, members, registry, queueName, jobId, priority)
+                redis.call('SADD', registry, queueName)
                 local existingMember = redis.call('HGET', members, jobId)
                 if existingMember then
                     if redis.call('ZSCORE', queue, existingMember) then
@@ -90,7 +95,15 @@ public final class RedisPriorityQueueStore {
             end
             """;
     private static final String ENQUEUE_SCRIPT = ENQUEUE_FUNCTION + """
-            return enqueuePriority(KEYS[1], KEYS[2], KEYS[3], ARGV[1], tonumber(ARGV[2]))
+            local sequenceType = redis.call('TYPE', KEYS[1]).ok
+            local queueType = redis.call('TYPE', KEYS[2]).ok
+            local membersType = redis.call('TYPE', KEYS[3]).ok
+            local registryType = redis.call('TYPE', KEYS[4]).ok
+            if (sequenceType ~= 'none' and sequenceType ~= 'stream') or
+               (queueType ~= 'none' and queueType ~= 'zset') or
+               (membersType ~= 'none' and membersType ~= 'hash') or
+               (registryType ~= 'none' and registryType ~= 'set') then return redis.error_reply('Priority queue keys have incompatible data types') end
+            return enqueuePriority(KEYS[1], KEYS[2], KEYS[3], KEYS[4], ARGV[2], ARGV[1], tonumber(ARGV[3]))
             """;
 
     private RedisPriorityQueueStore() {
@@ -112,6 +125,11 @@ public final class RedisPriorityQueueStore {
         return MEMBERS_PREFIX + queueName;
     }
 
+    /** Redis key used by the queue registry's atomic insertion scripts. */
+    public static String queueRegistryKey() {
+        return RedisQueueRegistry.REDIS_KEY;
+    }
+
     /** Shared Lua implementation for the queue's FIFO tie-break and duplicate handling. */
     public static String enqueueFunctionLua() {
         return ENQUEUE_FUNCTION;
@@ -124,9 +142,10 @@ public final class RedisPriorityQueueStore {
                         legacyKey(queueName),
                         queueKey(queueName),
                         sequenceKey(queueName),
-                        membersKey(queueName)
+                        membersKey(queueName),
+                        RedisQueueRegistry.REDIS_KEY
                 ),
-                List.of()
+                List.of(queueName)
         );
     }
 
@@ -141,9 +160,10 @@ public final class RedisPriorityQueueStore {
                 List.of(
                         sequenceKey(queueName),
                         queueKey(queueName),
-                        membersKey(queueName)
+                        membersKey(queueName),
+                        RedisQueueRegistry.REDIS_KEY
                 ),
-                List.of(jobId, Integer.toString(priority))
+                List.of(jobId, queueName, Integer.toString(priority))
         );
     }
 

@@ -6,16 +6,43 @@ import io.github.pandeyayushk.jobstream.payload.Payload;
 import io.github.pandeyayushk.jobstream.persistence.RedisJobRepository;
 import io.github.pandeyayushk.jobstream.serialization.JacksonJobSerializer;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import redis.clients.jedis.RedisClient;
 
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 public class RedisJobSubmissionStoreTest {
+    private Set<String> registeredBeforeTest;
+
+    @BeforeEach
+    void rememberExistingRegistryEntries() {
+        try (RedisClient client = RedisClient.create("redis://localhost:6379")) {
+            registeredBeforeTest = client.smembers(RedisQueueRegistry.REDIS_KEY);
+        }
+    }
+
+    @AfterEach
+    void removeQueueDataCreatedByTest() {
+        try (RedisClient client = RedisClient.create("redis://localhost:6379")) {
+            Set<String> current = client.smembers(RedisQueueRegistry.REDIS_KEY);
+            current.removeAll(registeredBeforeTest);
+            for (String queueName : current) {
+                client.srem(RedisQueueRegistry.REDIS_KEY, queueName);
+                client.del(RedisPriorityQueueStore.legacyKey(queueName),
+                        RedisPriorityQueueStore.queueKey(queueName),
+                        RedisPriorityQueueStore.sequenceKey(queueName),
+                        RedisPriorityQueueStore.membersKey(queueName));
+            }
+        }
+    }
+
     @Test
     public void submitMovesPendingJobToQueued() {
         RedisClient client = RedisClient.builder()

@@ -2,7 +2,7 @@
 
 ## Purpose and status
 
-Specify Phase 9 operational metrics and inspection. The requirements are finalized; no Phase 9 implementation is present yet. Worker retry backoff remains process-local, CLI scheduling flags remain absent, and scheduler-poller runtime bootstrap remains deferred from Phase 8.
+Specify Phase 9 operational metrics and inspection. The requirements are finalized; metrics are not implemented yet. The JDK server currently provides live/ready health routes, and `QueueRegistry` provides Redis-backed queue discovery for future gauges and the queue endpoint. Worker retry backoff remains process-local, CLI scheduling flags remain absent, and scheduler-poller runtime bootstrap remains deferred from Phase 8.
 
 ## Counters
 

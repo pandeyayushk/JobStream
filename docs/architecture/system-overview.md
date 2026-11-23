@@ -1,16 +1,17 @@
 # System Overview
 
-JobStream is a Java 21 Redis-backed job queue. Phase 8 priority and durable scheduling infrastructure is implemented. Worker retry integration, CLI scheduling flags, and automatic poller bootstrap remain deferred. Metrics/API (Phase 9) and deployment/hardening (Phase 10) are planned.
+JobStream is a Java 21 Redis-backed job queue. Phase 8 priority and durable scheduling infrastructure is implemented. Phase 9 is in progress: the JDK HTTP server's health routes and Redis queue registry/backfill are implemented; metrics and management routes remain pending. Worker retry integration, CLI scheduling flags, and automatic poller bootstrap remain deferred. Deployment/hardening (Phase 10) is planned.
 
 ## Implemented subsystems
 
 1. **Domain (`job`, `payload`)** — immutable Jobs, lifecycle states, priority, scheduled timestamp, retry data, and payload.
 2. **Serialization and persistence** — Jackson serialization, authoritative Job records, status indexes, and revision-based optimistic concurrency.
-3. **Queue and submission (`queue`)** — named Redis priority Sorted Sets, FIFO tie-breaking for equal priorities, legacy active List migration, atomic submission, and JobId-only queue operations.
+3. **Queue and submission (`queue`)** — named Redis priority Sorted Sets, FIFO tie-breaking for equal priorities, Redis Set queue registry, legacy active List migration/backfill, atomic submission, and JobId-only queue operations.
 4. **Scheduling (`schedule`)** — durable JobId schedule indexes, destination routing, and bounded atomic release to priority queues.
 5. **Worker and execution (`worker`, `executor`)** — queue acquisition, registered execution, lifecycle, heartbeat, and bounded processing.
 6. **Retry and failure (`retry`)** — retry policy, existing in-memory Worker retry delays, Redis DLQ, and manual requeue.
 7. **CLI (`cli`)** — operator commands for job submission and inspection, queues, workers, and DLQ. It has no delay or priority submission flags.
+8. **HTTP health (`api`)** — explicitly managed JDK HTTP server with bounded executor, Redis-independent liveness, and Redis PING readiness. Job, queue-list, worker, DLQ, and metrics routes are pending.
 
 ## Architecture flows
 

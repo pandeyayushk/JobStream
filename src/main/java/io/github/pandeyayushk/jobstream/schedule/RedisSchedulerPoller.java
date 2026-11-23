@@ -86,14 +86,15 @@ public final class RedisSchedulerPoller implements SchedulerPoller {
                not compatible(KEYS[5], 'set') or
                not compatible(KEYS[6], 'stream') or
                not compatible(KEYS[7], 'zset') or
-               not compatible(KEYS[8], 'hash') then return -1 end
+               not compatible(KEYS[8], 'hash') or
+               not compatible(KEYS[9], 'set') then return -1 end
 
             redis.call('SET', KEYS[3], ARGV[6])
             redis.call('SREM', KEYS[4], id)
             redis.call('SADD', KEYS[5], id)
             redis.call('ZREM', KEYS[1], id)
             redis.call('HDEL', KEYS[2], id)
-            enqueuePriority(KEYS[6], KEYS[7], KEYS[8], id, tonumber(ARGV[7]))
+            enqueuePriority(KEYS[6], KEYS[7], KEYS[8], KEYS[9], target, id, tonumber(ARGV[7]))
             return 1
             """;
 
@@ -260,7 +261,8 @@ public final class RedisSchedulerPoller implements SchedulerPoller {
                 STATUS_KEY_PREFIX + JobStatus.QUEUED.name(),
                 RedisPriorityQueueStore.sequenceKey(target),
                 RedisPriorityQueueStore.queueKey(target),
-                RedisPriorityQueueStore.membersKey(target)
+                RedisPriorityQueueStore.membersKey(target),
+                RedisPriorityQueueStore.queueRegistryKey()
         );
         return resultCode(client.eval(RELEASE_SCRIPT, keys, List.of(
                 rawId,

@@ -47,6 +47,7 @@ class RedisPriorityQueueIntegrationTest {
     @AfterEach
     void tearDown() {
         for (String queueName : List.of(queuePrefix, queuePrefix + "-a", queuePrefix + "-b")) {
+            client.srem(RedisQueueRegistry.REDIS_KEY, queueName);
             client.del(
                     RedisPriorityQueueStore.legacyKey(queueName),
                     RedisPriorityQueueStore.queueKey(queueName),

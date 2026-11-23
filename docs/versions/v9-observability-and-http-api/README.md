@@ -1,6 +1,6 @@
 # Phase 9 — Observability & HTTP API
 
-**Status: Specification finalized; Phase 9 Steps 1–2 are complete.** Jackson 3.3.0 and the API configuration/error foundation are in place. HTTP server, metrics, and queue-registry implementation has not started. This document separates current capabilities from remaining planned work and deferred integrations.
+**Status: Specification finalized; Jackson/API foundations, the embedded health server, and the Redis queue registry/backfill are implemented.** Metrics and the remaining management API endpoints are still pending. This document separates current capabilities from remaining planned work and deferred integrations.
 
 ## Existing capabilities and constraints
 
@@ -38,7 +38,13 @@ Gauges are read on request: per-queue/total depth via `JobQueue.size` for regist
 
 ## Queue discovery
 
-Add Redis Set `jobstream:queues` and `QueueRegistry`. Every priority-queue insertion registers its queue name with `SADD` in the same Lua operation, including atomic submit, poller release, direct enqueue/requeue, legacy migration, and DLQ requeue. Concurrent registration is idempotent. Dequeue retains the name when depth reaches zero. A one-time cursor-based `SCAN` backfill registers pre-existing priority queue keys and legacy active-queue List keys, excluding the DLQ key `jobstream:queue:dead-letter`. SCAN is not a snapshot; concurrent new writes are covered by atomic registration. Do not use `KEYS` in request paths or automatically remove queue names in Phase 9.
+`QueueRegistry` is implemented in the `queue` package by `RedisQueueRegistry`, backed by Redis Set `jobstream:queues`. Its public operations register a name idempotently and list names in lexical order. Queue names are retained after the queue empties; there is no automatic unregister operation.
+
+All active queue insertions add the name with `SADD` inside the same Lua script that inserts the member: atomic job submission, scheduler poller release, direct enqueue/requeue, legacy List migration, and DLQ requeue into an active queue. The dead-letter List is not registered as an active queue.
+
+`backfillExistingQueues()` scans `jobstream:priority-queue:*` keys of type ZSET and `jobstream:queue:*` keys of type List, explicitly excluding `jobstream:queue:dead-letter`. It uses cursor-based `SCAN`, never `KEYS`, and only registers keys matching the expected prefix and Redis type. Every invocation starts at cursor zero and completes both scans before returning. If interrupted, successful SADD operations remain and a later invocation safely repeats the scan; there is no premature completion marker or global lock. Multiple instances can backfill concurrently because SADD is idempotent. SCAN is not a snapshot: concurrent new insertions are registered by their insertion scripts, including queues created after their matching scan page has passed. Only existing Redis queue keys can be backfilled; a legacy queue whose data has already disappeared has no key from which to recover its name.
+
+Backfill is an explicit registry operation. No production bootstrap currently invokes it automatically; callers that need names from pre-registry data must run it before relying on listing for those queues.
 
 ## Worker inspection
 
@@ -49,6 +55,8 @@ Add Redis Set `jobstream:queues` and `QueueRegistry`. Every priority-queue inser
 - `GET /health/live`: 200 `{"status":"UP"}` if the HTTP process can respond; no Redis call.
 - `GET /health/ready`: Redis `PING`; 200 `{"status":"UP","dependencies":{"redis":"UP"}}`; 503 with Redis DOWN on failure. Catch Redis errors so the server remains alive.
 - No `/health` alias; liveness and readiness are intentionally distinct.
+
+The JDK `HttpServer` lifecycle is implemented with an explicitly started `AutoCloseable` server and a bounded executor. It currently exposes only these two health routes; the other API contracts below remain planned.
 
 ## API contract
 
@@ -61,7 +69,7 @@ Success bodies are JSON. Errors use `{"error":{"code":"...","message":"..."}}`; 
 | `GET /metrics` | none | 200/503 | Process counters plus Redis gauges; no partial success on gauge failure. |
 | `POST /api/v1/jobs` | `{ "type": string, "payload": object, "queue": string, "priority": integer? }` | 201 committed queued Job and `Location` | Required nonblank type/queue and valid object payload; priority defaults 0 and fits Java int. Immediate submission only; no delay/schedule field. Uses `QueueCoordinator.submit`. |
 | `GET /api/v1/jobs/{id}` | UUID | 200 Job / 404 | Invalid UUID 400; `JobRepository`. |
-| `GET /api/v1/queues` | none | 200 `{"queues":[{"name":"...","depth":0}]}` | Lexical name order. New `QueueRegistry` plus `JobQueue.size`. |
+| `GET /api/v1/queues` | none | 200 `{"queues":[{"name":"...","depth":0}]}` | Pending handler. Uses implemented `QueueRegistry` and `JobQueue.size`; lexical name order. |
 | `GET /api/v1/workers` | none | 200 `{"workers":[{"id":"...","status":"RUNNING","startedAt":"..."}]}` | `WorkerRegistry.listActiveWorkers`; heartbeat presence only, no processing state. |
 | `GET /api/v1/dlq?offset=0&limit=50` | offset >= 0; limit 1..100 | 200 paginated `jobs` | Uses `DeadLetterQueue.listDeadJobs`; invalid pagination 400. |
 | `POST /api/v1/dlq/{id}/requeue` | `{ "queue": string }` | 200 persisted queued Job | Uses `DeadLetterQueue.requeue`; malformed ID/blank queue 400, missing 404, state conflict 409 when distinguishable. |
@@ -74,21 +82,21 @@ Cancellation is excluded. `JobStatus` has no cancellation state, `JobQueue` cann
 
 Bind to `127.0.0.1` by default; non-loopback bind requires explicit configuration. V1 has no built-in authentication. Remote use requires trusted private networking and an authenticated reverse proxy/firewall; the API is not safe for direct public exposure. Keep Redis credentials protected and never echo them. Require JSON content type, validate paths and inputs before Redis calls, constrain JSON parsing, cap body size at 1 MiB, and sanitize request/error logs.
 
-`RedisConfig` has an optional password field, but current `CliContext` wiring only accepts host/port and builds a credential-free Redis URI. Phase 9 connection wiring must explicitly honor configured credentials without logging or returning them; the existing field alone does not mean credentialed connections are currently configured.
+`RedisConfig` has an optional password field. The HTTP readiness probe passes that password explicitly to Jedis and does not log or return it. Existing `CliContext` wiring still accepts only host/port and does not use the optional password.
 
-`ApiConfig` defaults to `127.0.0.1:8080`, a 1 MiB request-body limit, 8 executor threads, and queue capacity 128. It validates address, port, positive limits, and executor bounds. It contains no Redis credentials and does not start or enable a server; bootstrap configuration belongs with the later server lifecycle step.
+`ApiConfig` defaults to `127.0.0.1:8080`, a 1 MiB request-body limit, 8 executor threads, and queue capacity 128. It validates address, port (including port 0 for ephemeral test binding), positive limits, and executor bounds. It contains no Redis credentials and constructing it does not start a server.
 
 ## Phase boundary
 
-Phase 9 will implement HTTP lifecycle/routes, health, process-local counters, Redis gauges, queue registry/backfill, and job/queue/worker/DLQ endpoints with tests. Deferred: Worker retry-to-Redis scheduler integration; CLI priority/delay flags; production poller bootstrap; cancellation; latency metrics; Prometheus exposition; durable cluster-wide counters; worker heartbeat timestamps/processing counts; built-in auth/public exposure.
+Implemented infrastructure: Jackson 3.3.0 and API configuration/error foundation; JDK HTTP server lifecycle and live/ready health routes; Redis queue registry with atomic insertion registration and legacy-key backfill. Pending Phase 9 work: process-local counters, Redis gauge endpoint, and job/queue/worker/DLQ handlers. Deferred: Worker retry-to-Redis scheduler integration; CLI priority/delay flags; production poller bootstrap; cancellation; latency metrics; Prometheus exposition; durable cluster-wide counters; worker heartbeat timestamps/processing counts; built-in auth/public exposure.
 
 ## Implementation sequence
 
 1. **Complete:** Upgrade and pin supported Jackson 3.3.0; verify compatibility with existing serialized Job records and tests.
-2. **Complete:** Add immutable `ApiConfig` defaults and validation, stable API error codes/statuses, safe JSON error envelope, and shared Jackson codec. Server startup remains in a later step.
-3. Implement `QueueRegistry` Redis Set; add atomic registration to every queue insertion Lua path and idempotent cursor-based SCAN backfill.
+2. **Complete:** Add immutable `ApiConfig` defaults and validation, stable API error codes/statuses, safe JSON error envelope, and shared Jackson codec.
+3. **Complete:** Implement `QueueRegistry` Redis Set, atomic registration in every queue insertion Lua path, and idempotent cursor-based SCAN backfill.
 4. Add process-local counters and instrument successful submit, completion, failed attempt, retry decision, and DLQ move boundaries. Enforce non-throwing metric recording.
-5. Add JDK HTTP server, bounded executor, lifecycle, routes, Jackson 3 JSON handling, errors, and health probes.
+5. **Complete:** Add JDK HTTP server, bounded executor, lifecycle, shared Jackson 3 JSON handling, safe errors, and live/ready health probes. Management routes remain in Step 6.
 6. Add job submit/read, queue/worker inspection, and DLQ list/requeue handlers.
 7. Add JSON metrics with Redis-backed gauge reads.
 8. Add counter, registry, real-Redis, and HTTP integration tests, including errors, Redis outage, limits, and shutdown.

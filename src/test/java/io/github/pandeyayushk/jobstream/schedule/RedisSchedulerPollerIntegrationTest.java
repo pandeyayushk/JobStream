@@ -7,6 +7,7 @@ import io.github.pandeyayushk.jobstream.payload.Payload;
 import io.github.pandeyayushk.jobstream.persistence.RedisJobRepository;
 import io.github.pandeyayushk.jobstream.queue.RedisJobQueue;
 import io.github.pandeyayushk.jobstream.queue.RedisPriorityQueueStore;
+import io.github.pandeyayushk.jobstream.queue.RedisQueueRegistry;
 import io.github.pandeyayushk.jobstream.serialization.JacksonJobSerializer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -63,6 +64,7 @@ class RedisSchedulerPollerIntegrationTest {
     void tearDown() {
         client.del(scheduledKey, targetsKey, cursorKey);
         for (String name : queueNames) {
+            client.srem(RedisPriorityQueueStore.queueRegistryKey(), name);
             client.del(RedisPriorityQueueStore.sequenceKey(name),
                     RedisPriorityQueueStore.queueKey(name), RedisPriorityQueueStore.membersKey(name),
                     "jobstream:queue:" + name);
@@ -87,6 +89,7 @@ class RedisSchedulerPollerIntegrationTest {
 
         assertEquals(1, result.released());
         assertEquals(JobStatus.QUEUED, stored(due).status());
+        assertTrue(client.sismember(RedisPriorityQueueStore.queueRegistryKey(), queueName("ready")));
         assertEquals(due.revision() + 2, stored(due).revision()); // scheduler write, then release
         assertEquals(due.id(), queue.dequeueNonBlocking(queueName("ready")).orElseThrow());
         assertEquals(1, scheduler.scheduledCount());

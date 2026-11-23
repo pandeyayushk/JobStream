@@ -3,6 +3,8 @@ package io.github.pandeyayushk.jobstream.retry;
 import io.github.pandeyayushk.jobstream.job.Job;
 import io.github.pandeyayushk.jobstream.job.JobId;
 import io.github.pandeyayushk.jobstream.job.JobStatus;
+import io.github.pandeyayushk.jobstream.queue.RedisPriorityQueueStore;
+import io.github.pandeyayushk.jobstream.queue.RedisQueueRegistry;
 import io.github.pandeyayushk.jobstream.serialization.JobSerializer;
 import redis.clients.jedis.RedisClient;
 import redis.clients.jedis.exceptions.JedisException;
@@ -48,7 +50,7 @@ public class RedisDeadLetterQueue implements DeadLetterQueue {
             return 1
             """;
 
-    private static final String REQUEUE_SCRIPT = """
+    private static final String REQUEUE_SCRIPT = RedisPriorityQueueStore.enqueueFunctionLua() + """
             local current = redis.call('GET', KEYS[2])
             if not current then return -1 end
             local ok, data = pcall(cjson.decode, current)
@@ -63,29 +65,21 @@ public class RedisDeadLetterQueue implements DeadLetterQueue {
             local sequenceType = redis.call('TYPE', KEYS[5]).ok
             local queueType = redis.call('TYPE', KEYS[6]).ok
             local membersType = redis.call('TYPE', KEYS[7]).ok
+            local registryType = redis.call('TYPE', KEYS[8]).ok
             if (listType ~= 'none' and listType ~= 'list') or
                (deadType ~= 'none' and deadType ~= 'set') or
                (queuedType ~= 'none' and queuedType ~= 'set') or
                (sequenceType ~= 'none' and sequenceType ~= 'stream') or
                (queueType ~= 'none' and queueType ~= 'zset') or
-               (membersType ~= 'none' and membersType ~= 'hash') then return -2 end
+               (membersType ~= 'none' and membersType ~= 'hash') or
+               (registryType ~= 'none' and registryType ~= 'set') then return -2 end
 
             redis.call('LREM', KEYS[1], 1, ARGV[3])
             redis.call('SET', KEYS[2], ARGV[2])
             redis.call('SREM', KEYS[3], ARGV[3])
             redis.call('SADD', KEYS[4], ARGV[3])
 
-            if redis.call('HEXISTS', KEYS[7], ARGV[3]) == 0 then
-                local streamId = redis.call('XADD', KEYS[5], '*', 'job', ARGV[3])
-                redis.call('XDEL', KEYS[5], streamId)
-                local millis, tick = string.match(streamId, '^(%d+)%-(%d+)$')
-                local function pad(value)
-                    return string.rep('0', 20 - string.len(value)) .. value
-                end
-                local member = pad(millis) .. '-' .. pad(tick) .. ':' .. ARGV[3]
-                redis.call('ZADD', KEYS[6], -tonumber(ARGV[4]), member)
-                redis.call('HSET', KEYS[7], ARGV[3], member)
-            end
+            enqueuePriority(KEYS[5], KEYS[6], KEYS[7], KEYS[8], ARGV[5], ARGV[3], tonumber(ARGV[4]))
             return 1
             """;
 
@@ -262,13 +256,15 @@ public class RedisDeadLetterQueue implements DeadLetterQueue {
                             io.github.pandeyayushk.jobstream.queue.RedisPriorityQueueStore
                                     .queueKey(targetQueue),
                             io.github.pandeyayushk.jobstream.queue.RedisPriorityQueueStore
-                                    .membersKey(targetQueue)
+                                    .membersKey(targetQueue),
+                            RedisPriorityQueueStore.queueRegistryKey()
                     ),
                     List.of(
                             Long.toString(job.revision()),
                             requeuedJson,
                             jobIdValue,
-                            Integer.toString(requeuedJob.priority())
+                            Integer.toString(requeuedJob.priority()),
+                            targetQueue
                     )
             );
 

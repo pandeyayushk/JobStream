@@ -8,13 +8,14 @@ This is the canonical guide to the implemented Java packages and their responsib
 src/main/java/io/github/pandeyayushk/jobstream/
   Main.java
   cli/           Picocli commands and shared CLI context
-  config/        RedisConfig
+  api/           API errors, embedded HTTP server and health/readiness checks
+  config/        ApiConfig, RedisConfig
   executor/      JobExecutor, ExecutionResult, registry
   job/           Job, JobId, JobStatus
   payload/       Payload domain abstraction
   persistence/   JobRepository and RedisJobRepository
-  queue/         JobQueue, RedisJobQueue, priority queue storage,
-                 submission coordinator and Redis submission store
+  queue/         JobQueue, RedisJobQueue, QueueRegistry and RedisQueueRegistry,
+                 priority queue storage, submission coordinator and Redis submission store
   retry/         retry policies, DeadLetterQueue and RedisDeadLetterQueue
   schedule/      JobScheduler, RedisJobScheduler, SchedulerPoller,
                  RedisSchedulerPoller and SchedulerPollResult
@@ -22,11 +23,11 @@ src/main/java/io/github/pandeyayushk/jobstream/
   worker/        Worker lifecycle, configuration and registry
 
 src/test/java/io/github/pandeyayushk/jobstream/
-  cli/ config/ executor/ job/ payload/ persistence/ queue/
+  api/ cli/ config/ executor/ job/ payload/ persistence/ queue/
   retry/ schedule/ serialization/ worker/
 ```
 
-Metrics and HTTP API packages are not present in `src/main/java`; they remain planned for Phase 9. Deployment and hardening work remains Phase 10.
+The `api` package currently implements HTTP lifecycle and health routes. Metrics and management endpoints remain planned Phase 9 work. Deployment and hardening work remains Phase 10.
 
 ## Package responsibilities and status
 
@@ -36,7 +37,9 @@ Metrics and HTTP API packages are not present in `src/main/java`; they remain pl
 | `payload` | Structured execution payload | Implemented, Phase 1 |
 | `serialization` | `JobSerializer`, `JacksonJobSerializer`; legacy-compatible persisted Job JSON | Implemented, Phase 2 |
 | `persistence` | `JobRepository`, `RedisJobRepository`, revision-aware save and status indexes | Implemented, Phases 2 and 8 concurrency updates |
-| `queue` | `JobQueue`, `RedisJobQueue`, `RedisPriorityQueueStore`, `QueueCoordinator`, `QueueCoordinatorImp`, `JobSubmissionStore`, `RedisJobSubmissionStore` | Implemented, Phases 3 and 8 priority queue |
+| `api` | `ApiException`, `ErrorResponse`, `ReadinessCheck`, `RedisReadinessCheck`, `JobStreamApiServer` | Implemented foundation and health endpoints, Phase 9; management routes pending |
+| `config` | `ApiConfig`, `RedisConfig` | Implemented API and Redis configuration |
+| `queue` | `JobQueue`, `RedisJobQueue`, `RedisPriorityQueueStore`, `QueueRegistry`, `RedisQueueRegistry`, `QueueCoordinator`, `QueueCoordinatorImp`, `JobSubmissionStore`, `RedisJobSubmissionStore` | Implemented, Phases 3 and 8; queue discovery/backfill, Phase 9 |
 | `worker` | Worker acquisition, execution lifecycle, registry and heartbeat | Implemented, Phases 4–5; not wired to durable retry scheduling |
 | `executor` | `JobExecutor`, `ExecutionResult`, executor registry | Implemented, Phase 5 |
 | `retry` | Retry policy and DLQ abstractions/implementation | Implemented, Phase 6; retry delays remain Worker-local and in-memory |
