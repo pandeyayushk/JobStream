@@ -16,6 +16,8 @@ Specify the Phase 9 operator and management API. The specification is finalized;
 - `RedisConfig` contains an optional password, but current `CliContext` constructs a credential-free Redis URI from host/port. API connection wiring must deliberately honor configured credentials; do not assume the existing field is already wired.
 - Use a bounded executor and explicit start/stop lifecycle. Redis outages must not terminate the HTTP process.
 
+`ApiConfig` defaults to `127.0.0.1:8080`, a 1 MiB request-body limit, 8 executor threads, and an executor queue capacity of 128. Bind address, port, body limit, and executor bounds are configurable and validated. No enable/disable flag is defined before server bootstrap exists; constructing configuration does not start a server.
+
 ## Endpoints
 
 | Method and path | Request | Response and status | Backing capability and rules |

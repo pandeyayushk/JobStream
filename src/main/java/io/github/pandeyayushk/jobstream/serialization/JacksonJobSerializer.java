@@ -6,7 +6,6 @@ import io.github.pandeyayushk.jobstream.job.JobId;
 import io.github.pandeyayushk.jobstream.job.JobStatus;
 import io.github.pandeyayushk.jobstream.payload.Payload;
 import tools.jackson.core.JacksonException;
-import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
 import java.util.Map;
@@ -31,7 +30,7 @@ public class JacksonJobSerializer implements JobSerializer{
             long revision
     ) {}
 
-    private final ObjectMapper mapper = new ObjectMapper();
+    private final JacksonJsonCodec codec = JacksonJsonCodec.shared();
     @Override
     public String serialize(Job job) throws SerializationException {
         JobData data=new JobData(
@@ -52,7 +51,7 @@ public class JacksonJobSerializer implements JobSerializer{
         );
         String json;
         try{
-             json=mapper.writeValueAsString(data);
+             json=codec.encode(data);
 
 
         } catch (JacksonException e) {
@@ -65,7 +64,7 @@ public class JacksonJobSerializer implements JobSerializer{
     public Job deserialize(String json) throws SerializationException {
         Job job;
         try{
-            JobData jobData=mapper.readValue(json,JobData.class);
+            JobData jobData=codec.decode(json,JobData.class);
             JobId id=JobId.fromString(jobData.id());
             Payload payload=Payload.of(jobData.payload());
             job=Job.reconstitute(id,

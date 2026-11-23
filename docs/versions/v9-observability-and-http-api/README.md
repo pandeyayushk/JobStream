@@ -1,6 +1,6 @@
 # Phase 9 — Observability & HTTP API
 
-**Status: Specification finalized; Phase 9 Step 1 upgrades Jackson to 3.3.0.** HTTP, metrics, and queue-registry implementation has not started. This document separates current capabilities from remaining planned work and deferred integrations.
+**Status: Specification finalized; Phase 9 Steps 1–2 are complete.** Jackson 3.3.0 and the API configuration/error foundation are in place. HTTP server, metrics, and queue-registry implementation has not started. This document separates current capabilities from remaining planned work and deferred integrations.
 
 ## Existing capabilities and constraints
 
@@ -76,6 +76,8 @@ Bind to `127.0.0.1` by default; non-loopback bind requires explicit configuratio
 
 `RedisConfig` has an optional password field, but current `CliContext` wiring only accepts host/port and builds a credential-free Redis URI. Phase 9 connection wiring must explicitly honor configured credentials without logging or returning them; the existing field alone does not mean credentialed connections are currently configured.
 
+`ApiConfig` defaults to `127.0.0.1:8080`, a 1 MiB request-body limit, 8 executor threads, and queue capacity 128. It validates address, port, positive limits, and executor bounds. It contains no Redis credentials and does not start or enable a server; bootstrap configuration belongs with the later server lifecycle step.
+
 ## Phase boundary
 
 Phase 9 will implement HTTP lifecycle/routes, health, process-local counters, Redis gauges, queue registry/backfill, and job/queue/worker/DLQ endpoints with tests. Deferred: Worker retry-to-Redis scheduler integration; CLI priority/delay flags; production poller bootstrap; cancellation; latency metrics; Prometheus exposition; durable cluster-wide counters; worker heartbeat timestamps/processing counts; built-in auth/public exposure.
@@ -83,7 +85,7 @@ Phase 9 will implement HTTP lifecycle/routes, health, process-local counters, Re
 ## Implementation sequence
 
 1. **Complete:** Upgrade and pin supported Jackson 3.3.0; verify compatibility with existing serialized Job records and tests.
-2. Define API configuration, DTO/error contract, loopback default, remote-bind opt-in, size/pagination limits.
+2. **Complete:** Add immutable `ApiConfig` defaults and validation, stable API error codes/statuses, safe JSON error envelope, and shared Jackson codec. Server startup remains in a later step.
 3. Implement `QueueRegistry` Redis Set; add atomic registration to every queue insertion Lua path and idempotent cursor-based SCAN backfill.
 4. Add process-local counters and instrument successful submit, completion, failed attempt, retry decision, and DLQ move boundaries. Enforce non-throwing metric recording.
 5. Add JDK HTTP server, bounded executor, lifecycle, routes, Jackson 3 JSON handling, errors, and health probes.

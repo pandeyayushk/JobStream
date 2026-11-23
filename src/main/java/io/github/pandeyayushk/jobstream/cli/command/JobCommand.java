@@ -7,6 +7,7 @@ import io.github.pandeyayushk.jobstream.job.JobId;
 import io.github.pandeyayushk.jobstream.payload.Payload;
 import io.github.pandeyayushk.jobstream.persistence.JobRepository;
 import io.github.pandeyayushk.jobstream.queue.QueueCoordinator;
+import io.github.pandeyayushk.jobstream.serialization.JacksonJsonCodec;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
@@ -94,10 +95,7 @@ public final class JobCommand implements Runnable {
 
         private Map<String, Object> parsePayload(String json) {
             try {
-                tools.jackson.databind.ObjectMapper mapper =
-                        new tools.jackson.databind.ObjectMapper();
-
-                return mapper.readValue(json, Map.class);
+                return JacksonJsonCodec.shared().decodeObject(json);
             } catch (Exception e) {
                 throw new IllegalArgumentException(
                         "Invalid JSON payload: " + e.getMessage(),
