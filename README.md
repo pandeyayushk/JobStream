@@ -16,7 +16,7 @@ The project is being built incrementally, phase by phase, with thorough document
 - Java 21 LTS, Maven, JUnit 5
 - Application entry point: `io.github.pandeyayushk.jobstream.Main`
 - Domain model: `JobId`, `JobStatus`, `Payload`, and `Job`
-- JSON serialization via Jackson Databind 3.2.2, without Jackson annotations on domain classes
+- JSON serialization via Jackson Databind 3.3.0, without Jackson annotations on domain classes
 - Redis persistence via Jedis 8.0.1 `RedisClient`, with authoritative job records and secondary status indexes
 - Numeric priority queueing via `JobQueue`, `RedisJobQueue`, and `RedisPriorityQueueStore`; Redis Sorted Sets order higher integer priorities first, with FIFO order for equal priorities
 - Durable delayed scheduling via `JobScheduler` and `RedisJobScheduler`; scheduler indexes store JobIds and destination queue names while Job records remain authoritative
@@ -41,7 +41,7 @@ Phases 0-8 infrastructure are complete. Phase 8 integrations that connect Worker
 | Language | Java 21 LTS |
 | Build System | Apache Maven |
 | Testing | JUnit 5 |
-| Serialization | Jackson Databind 3.2.2 |
+| Serialization | Jackson Databind 3.3.0 |
 | Persistence | Redis via Jedis 8.0.1 |
 | Queue Backend | Redis Sorted Sets for priority queues; Redis Lists for legacy queue migration and the DLQ |
 

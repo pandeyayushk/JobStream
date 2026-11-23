@@ -2,7 +2,7 @@
 
 ## Purpose and status
 
-Specify the Phase 9 operator and management API. The specification is finalized; implementation has not started. The first version uses JDK `com.sun.net.httpserver.HttpServer` and existing Jackson 3.2.2 serialization, with no HTTP framework dependency. See [ADR-012](../decisions/ADR-012-jdk-http-server.md).
+Specify the Phase 9 operator and management API. The specification is finalized; Step 1 has upgraded Jackson to 3.3.0, while HTTP endpoints and server lifecycle remain unimplemented. The first version uses JDK `com.sun.net.httpserver.HttpServer` and Jackson 3 serialization, with no HTTP framework dependency. See [ADR-012](../decisions/ADR-012-jdk-http-server.md).
 
 ## Common contract
 

@@ -1,6 +1,6 @@
 # Phase 9 — Observability & HTTP API
 
-**Status: Specification finalized; implementation has not started.** This document separates existing capabilities from planned Phase 9 work and deferred integrations.
+**Status: Specification finalized; Phase 9 Step 1 upgrades Jackson to 3.3.0.** HTTP, metrics, and queue-registry implementation has not started. This document separates current capabilities from remaining planned work and deferred integrations.
 
 ## Existing capabilities and constraints
 
@@ -12,11 +12,11 @@ Existing interfaces: `JobRepository` supports lookup/save/status queries; `Queue
 
 ## HTTP framework decision
 
-Use Java 21's `com.sun.net.httpserver.HttpServer` (`jdk.httpserver`) for the embedded operator API. It adds no Maven dependency and works with the existing Jackson 3.2.2 `ObjectMapper`. Use a bounded executor, explicit route dispatch, shared JSON/error helpers, request-size limits, and an `AutoCloseable` lifecycle. Integration tests use the JDK `HttpClient` against an ephemeral loopback port.
+Use Java 21's `com.sun.net.httpserver.HttpServer` (`jdk.httpserver`) for the embedded operator API. It adds no Maven dependency and works with the existing Jackson 3.3.0 `ObjectMapper`. Use a bounded executor, explicit route dispatch, shared JSON/error helpers, request-size limits, and an `AutoCloseable` lifecycle. Integration tests use the JDK `HttpClient` against an ephemeral loopback port.
 
 Javalin 7.2.4 is actively released and requires Java 17+, so it is Java 21 compatible. Jackson 2 (`com.fasterxml.jackson`) and Jackson 3 (`tools.jackson`) are distinct and not binary compatible, but Javalin 7.2.0+ provides an optional native `JavalinJackson3` mapper. With Javalin, configure that mapper explicitly and depend on the Jackson 3 artifacts; do not use `javalin-bundle` if its Jackson 2 defaults are unwanted. Javalin's core Jackson dependencies are optional, while Jetty runtime dependencies are required. Javalin therefore can use the existing mapper generation without a custom adapter, at the cost of Jetty and the framework. Its routing, validation, and exception mapping are useful; for this small fixed route set, the JDK server still has the lower footprint and no extra dependency. Revisit if API needs grow.
 
-Version support caveat: the project currently pins Jackson 3.2.2. As of the Phase 9 specification date, the Jackson 3.2 branch is closed; 3.3 is the active release branch and 3.1 is the LTS branch. Phase 9 implementation should first select and pin a supported Jackson 3 line (prefer the 3.1 LTS line unless the project explicitly chooses current-release features), then use that same line in serialization and HTTP handling. Javalin 7.2.4's Jackson 3 mapper is optional, so Maven resolution must be checked against the chosen pin.
+Version support: Phase 9 Step 1 selected Jackson 3.3.0, published on the active 3.3 release branch. Jackson 3.1 remains the LTS branch. Javalin 7.2.4's Jackson 3 mapper is optional; any future Javalin selection must explicitly configure it and verify Maven resolution against the project's Jackson pin.
 
 ## Metrics architecture and semantics
 
@@ -82,7 +82,7 @@ Phase 9 will implement HTTP lifecycle/routes, health, process-local counters, Re
 
 ## Implementation sequence
 
-1. Upgrade and pin Jackson to the selected supported Jackson 3 line; run existing serialization tests and inspect the resolved dependency tree.
+1. **Complete:** Upgrade and pin supported Jackson 3.3.0; verify compatibility with existing serialized Job records and tests.
 2. Define API configuration, DTO/error contract, loopback default, remote-bind opt-in, size/pagination limits.
 3. Implement `QueueRegistry` Redis Set; add atomic registration to every queue insertion Lua path and idempotent cursor-based SCAN backfill.
 4. Add process-local counters and instrument successful submit, completion, failed attempt, retry decision, and DLQ move boundaries. Enforce non-throwing metric recording.

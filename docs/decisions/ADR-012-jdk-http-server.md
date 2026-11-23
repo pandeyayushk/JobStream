@@ -6,7 +6,7 @@
 
 ## Context
 
-JobStream targets Java 21 and currently has no HTTP framework. It already uses Jackson 3.2.2 (`tools.jackson`) and has a bounded operator API endpoint list. The old Phase 9 proposal suggested Javalin 6.1.3, which is no longer the current maintained line.
+JobStream targets Java 21 and currently has no HTTP framework. It uses Jackson 3 (`tools.jackson`) and has a bounded operator API endpoint list. The old Phase 9 proposal suggested Javalin 6.1.3, which is no longer the current maintained line.
 
 ## Decision
 
@@ -14,7 +14,7 @@ Use `com.sun.net.httpserver.HttpServer` from the JDK `jdk.httpserver` module, wi
 
 Javalin's current 7.2.4 line supports Java 17+, so it is compatible with Java 21. Jackson 2 (`com.fasterxml.jackson`) and Jackson 3 (`tools.jackson`) are distinct APIs, but Javalin 7.2.0+ provides an optional native `JavalinJackson3` mapper. Javalin core's Jackson artifacts are optional; its `javalin-bundle` includes Jackson/Logback/testing utilities. Core still adds required Jetty runtime dependencies. Javalin could use its native Jackson 3 mapper without an adapter, while the JDK server adds no framework dependency. Spring and other larger alternatives add more surface than the fixed route set needs.
 
-The current JobStream pin is Jackson 3.2.2. As of 2026-11-23, that minor line is closed; Jackson 3.3 is the active release branch and 3.1 is the LTS branch. Before implementation, move to a supported Jackson 3 line and verify the dependency tree. This maintenance action is independent of HTTP server selection.
+At decision time, the project pinned Jackson 3.2.2. That minor line is closed; Jackson 3.3 is the active release branch and 3.1 is the LTS branch. Phase 9 Step 1 selected and upgraded the project to Jackson 3.3.0, verifying its dependency tree. This maintenance action is independent of HTTP server selection.
 
 ## Consequences
 

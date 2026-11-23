@@ -14,7 +14,7 @@ JobStream uses Redis for durable job storage and, as of Phase 3, FIFO queue disp
 
 Use Redis for Phase 2 job persistence with Jedis 8.0.1 `RedisClient`. `RedisJobRepository` receives an already-created client through constructor injection; it does not create or own the client, and `JedisPool` is not used.
 
-Jobs are serialized as JSON by the Jackson Databind 3.2.2 serializer and stored using this schema:
+Jobs are serialized as JSON by the Jackson Databind 3.3.0 serializer and stored using this schema:
 
 ```
 jobstream:job:<uuid>

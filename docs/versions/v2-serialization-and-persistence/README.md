@@ -15,7 +15,7 @@ Jobs cross process and persistence boundaries. This phase provides a portable JS
 ## 3. Implemented Scope
 
 - `JobSerializer` and `SerializationException` in `io.github.pandeyayushk.jobstream.serialization`
-- `JacksonJobSerializer`, using Jackson Databind 3.2.2 and a Jackson 3.x `ObjectMapper`
+- `JacksonJobSerializer`, using Jackson Databind 3.3.0 and a Jackson 3.x `ObjectMapper`
 - A private `JobData` representation in `JacksonJobSerializer`; domain classes remain free of Jackson annotations and dependencies
 - `JobRepository`, `PersistenceException`, and `RedisJobRepository`
 - `RedisConfig` for host, port, and optional password
