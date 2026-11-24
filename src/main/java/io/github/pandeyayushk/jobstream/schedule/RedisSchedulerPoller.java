@@ -89,6 +89,8 @@ public final class RedisSchedulerPoller implements SchedulerPoller {
                not compatible(KEYS[8], 'hash') or
                not compatible(KEYS[9], 'set') then return -1 end
 
+            -- Register first so a failed release cannot leave an undiscoverable queue.
+            redis.call('SADD', KEYS[9], target)
             redis.call('SET', KEYS[3], ARGV[6])
             redis.call('SREM', KEYS[4], id)
             redis.call('SADD', KEYS[5], id)
@@ -121,6 +123,7 @@ public final class RedisSchedulerPoller implements SchedulerPoller {
     private final String targetsKey;
     private final String cursorKey;
     private final Runnable beforeRelease;
+    private final String queueRegistryKey;
 
     public RedisSchedulerPoller(RedisClient client, JobSerializer serializer) {
         this(client, serializer, Clock.systemUTC());
@@ -140,6 +143,20 @@ public final class RedisSchedulerPoller implements SchedulerPoller {
             String cursorKey,
             Runnable beforeRelease
     ) {
+        this(client, serializer, clock, scheduledKey, targetsKey, cursorKey,
+                beforeRelease, RedisPriorityQueueStore.queueRegistryKey());
+    }
+
+    RedisSchedulerPoller(
+            RedisClient client,
+            JobSerializer serializer,
+            Clock clock,
+            String scheduledKey,
+            String targetsKey,
+            String cursorKey,
+            Runnable beforeRelease,
+            String queueRegistryKey
+    ) {
         this.client = Objects.requireNonNull(client, "RedisClient cannot be null");
         this.serializer = Objects.requireNonNull(serializer, "JobSerializer cannot be null");
         this.clock = Objects.requireNonNull(clock, "Clock cannot be null");
@@ -147,6 +164,7 @@ public final class RedisSchedulerPoller implements SchedulerPoller {
         this.targetsKey = Objects.requireNonNull(targetsKey, "Targets key cannot be null");
         this.cursorKey = Objects.requireNonNull(cursorKey, "Cursor key cannot be null");
         this.beforeRelease = Objects.requireNonNull(beforeRelease, "Hook cannot be null");
+        this.queueRegistryKey = Objects.requireNonNull(queueRegistryKey, "Queue registry key cannot be null");
     }
 
     @Override
@@ -262,7 +280,7 @@ public final class RedisSchedulerPoller implements SchedulerPoller {
                 RedisPriorityQueueStore.sequenceKey(target),
                 RedisPriorityQueueStore.queueKey(target),
                 RedisPriorityQueueStore.membersKey(target),
-                RedisPriorityQueueStore.queueRegistryKey()
+                queueRegistryKey
         );
         return resultCode(client.eval(RELEASE_SCRIPT, keys, List.of(
                 rawId,

@@ -74,6 +74,8 @@ public class RedisDeadLetterQueue implements DeadLetterQueue {
                (membersType ~= 'none' and membersType ~= 'hash') or
                (registryType ~= 'none' and registryType ~= 'set') then return -2 end
 
+            -- Register first so a failed requeue cannot leave an undiscoverable queue.
+            redis.call('SADD', KEYS[8], ARGV[5])
             redis.call('LREM', KEYS[1], 1, ARGV[3])
             redis.call('SET', KEYS[2], ARGV[2])
             redis.call('SREM', KEYS[3], ARGV[3])
@@ -85,10 +87,19 @@ public class RedisDeadLetterQueue implements DeadLetterQueue {
 
     private final RedisClient client;
     private final JobSerializer serializer;
+    private final String queueRegistryKey;
 
     public RedisDeadLetterQueue(
             RedisClient client,
             JobSerializer serializer
+    ) {
+        this(client, serializer, RedisPriorityQueueStore.queueRegistryKey());
+    }
+
+    RedisDeadLetterQueue(
+            RedisClient client,
+            JobSerializer serializer,
+            String queueRegistryKey
     ) {
         if (client == null) {
             throw new IllegalArgumentException("Redis client cannot be null");
@@ -100,6 +111,9 @@ public class RedisDeadLetterQueue implements DeadLetterQueue {
 
         this.client = client;
         this.serializer = serializer;
+        this.queueRegistryKey = java.util.Objects.requireNonNull(
+                queueRegistryKey, "Queue registry key cannot be null"
+        );
     }
 
 
@@ -257,7 +271,7 @@ public class RedisDeadLetterQueue implements DeadLetterQueue {
                                     .queueKey(targetQueue),
                             io.github.pandeyayushk.jobstream.queue.RedisPriorityQueueStore
                                     .membersKey(targetQueue),
-                            RedisPriorityQueueStore.queueRegistryKey()
+                            queueRegistryKey
                     ),
                     List.of(
                             Long.toString(job.revision()),

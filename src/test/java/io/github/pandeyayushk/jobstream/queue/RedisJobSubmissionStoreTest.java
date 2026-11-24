@@ -90,6 +90,43 @@ public class RedisJobSubmissionStoreTest {
     }
 
     @Test
+    public void wrongTypeRegistryPreventsSubmissionStateAndQueueMutations() {
+        RedisClient client = RedisClient.create("redis://localhost:6379");
+        JacksonJobSerializer serializer = new JacksonJobSerializer();
+        RedisJobRepository repository = new RedisJobRepository(client, serializer);
+        String queueName = "submission-registry-type-" + UUID.randomUUID();
+        String registryKey = "jobstream:test:registry-type:" + UUID.randomUUID();
+        Job original = repository.save(Job.create("email", Payload.empty()));
+        Job queued = original.withStatus(JobStatus.QUEUED);
+        client.set(registryKey, "wrong-type");
+
+        try {
+            RedisJobSubmissionStore store = new RedisJobSubmissionStore(
+                    client, serializer, registryKey
+            );
+
+            assertThrows(QueueException.class, () -> store.submit(original, queued, queueName));
+
+            Job current = repository.findById(original.id()).orElseThrow();
+            assertEquals(JobStatus.PENDING, current.status());
+            assertEquals(original.revision(), current.revision());
+            assertEquals(0, client.zcard(RedisPriorityQueueStore.queueKey(queueName)));
+            assertFalse(client.sismember("jobstream:status:QUEUED", original.id().toString()));
+            assertEquals("wrong-type", client.get(registryKey));
+        } finally {
+            client.del(registryKey, "jobstream:job:" + original.id(),
+                    RedisPriorityQueueStore.legacyKey(queueName),
+                    RedisPriorityQueueStore.queueKey(queueName),
+                    RedisPriorityQueueStore.sequenceKey(queueName),
+                    RedisPriorityQueueStore.membersKey(queueName));
+            for (JobStatus status : JobStatus.values()) {
+                client.srem("jobstream:status:" + status, original.id().toString());
+            }
+            client.close();
+        }
+    }
+
+    @Test
     public void staleSubmissionCannotOverwriteNewerPersistedJob() {
         RedisClient client = RedisClient.create("redis://localhost:6379");
         JacksonJobSerializer serializer = new JacksonJobSerializer();

@@ -40,6 +40,7 @@ class RedisSchedulerPollerIntegrationTest {
     private String targetsKey;
     private String cursorKey;
     private String queuePrefix;
+    private String wrongRegistryKey;
     private final List<JobId> ids = new ArrayList<>();
     private final List<String> queueNames = new ArrayList<>();
 
@@ -63,6 +64,7 @@ class RedisSchedulerPollerIntegrationTest {
     @AfterEach
     void tearDown() {
         client.del(scheduledKey, targetsKey, cursorKey);
+        if (wrongRegistryKey != null) client.del(wrongRegistryKey);
         for (String name : queueNames) {
             client.srem(RedisPriorityQueueStore.queueRegistryKey(), name);
             client.del(RedisPriorityQueueStore.sequenceKey(name),
@@ -94,6 +96,30 @@ class RedisSchedulerPollerIntegrationTest {
         assertEquals(due.id(), queue.dequeueNonBlocking(queueName("ready")).orElseThrow());
         assertEquals(1, scheduler.scheduledCount());
         assertEquals(queueName("future"), client.hget(targetsKey, future.id().toString()));
+    }
+
+    @Test
+    void wrongTypeRegistryLeavesScheduledJobAndQueueUnchanged() {
+        Job job = persist(Job.create("mail", Payload.empty()));
+        String target = queueName("wrong-registry");
+        schedule(job, NOW, "wrong-registry");
+        Job scheduled = stored(job);
+        wrongRegistryKey = "jobstream:test:poll:wrong-registry:" + UUID.randomUUID();
+        client.set(wrongRegistryKey, "wrong-type");
+        RedisSchedulerPoller wrongRegistryPoller = new RedisSchedulerPoller(
+                client, serializer, Clock.fixed(NOW, ZoneOffset.UTC),
+                scheduledKey, targetsKey, cursorKey, () -> { }, wrongRegistryKey
+        );
+
+        assertThrows(JobSchedulingException.class, () -> wrongRegistryPoller.pollOnce(10));
+
+        Job current = stored(job);
+        assertEquals(JobStatus.PENDING, current.status());
+        assertEquals(scheduled.revision(), current.revision());
+        assertEquals((double) NOW.toEpochMilli(), client.zscore(scheduledKey, job.id().toString()));
+        assertEquals(target, client.hget(targetsKey, job.id().toString()));
+        assertEquals(0, queue.size(target));
+        assertEquals("wrong-type", client.get(wrongRegistryKey));
     }
 
     @Test

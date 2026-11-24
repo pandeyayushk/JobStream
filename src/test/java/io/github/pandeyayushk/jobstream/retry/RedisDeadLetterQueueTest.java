@@ -323,6 +323,34 @@ class RedisDeadLetterQueueTest {
         assertEquals(deadJob.maxRetries(), requeued.maxRetries());
     }
 
+    @Test
+    void wrongTypeRegistryLeavesDeadLetterJobAndQueueUnchanged() {
+        Job failed = Job.create("test-job", Payload.empty())
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED);
+        Job persistedFailed = repository.save(failed);
+        deadLetterQueue.moveToDeadLetter(persistedFailed, "test failure");
+        Job dead = repository.findById(persistedFailed.id()).orElseThrow();
+        String registryKey = "jobstream:test:dlq:registry-type:" + persistedFailed.id();
+        String target = "dlq-registry-type-" + persistedFailed.id();
+        client.set(registryKey, "wrong-type");
+        RedisDeadLetterQueue queueWithWrongRegistry = new RedisDeadLetterQueue(
+                client, new JacksonJobSerializer(), registryKey
+        );
+
+        assertThrows(RetryException.class,
+                () -> queueWithWrongRegistry.requeue(persistedFailed.id(), target));
+
+        Job current = repository.findById(persistedFailed.id()).orElseThrow();
+        assertEquals(JobStatus.DEAD, current.status());
+        assertEquals(dead.revision(), current.revision());
+        assertTrue(client.lrange("jobstream:queue:dead-letter", 0, -1)
+                .contains(persistedFailed.id().toString()));
+        assertEquals(0, new RedisJobQueue(client).size(target));
+        assertEquals("wrong-type", client.get(registryKey));
+    }
+
 
     @Test
     void requeueRemovesJobFromDeadLetterQueue() {

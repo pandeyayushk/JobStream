@@ -37,6 +37,8 @@ public class RedisJobSubmissionStore implements JobSubmissionStore {
                (membersType ~= 'none' and membersType ~= 'hash') or
                (registryType ~= 'none' and registryType ~= 'set') then return -2 end
 
+            -- Register first so an insertion failure cannot leave an undiscoverable queue.
+            redis.call('SADD', KEYS[6], ARGV[6])
             redis.call('SET', KEYS[1], ARGV[1])
             redis.call('SREM', oldStatusKey, ARGV[2])
             redis.call('SADD', KEYS[2], ARGV[2])
@@ -53,16 +55,21 @@ public class RedisJobSubmissionStore implements JobSubmissionStore {
                 redis.call('ZADD', KEYS[4], -tonumber(ARGV[4]), member)
                 redis.call('HSET', KEYS[5], jobId, member)
             end
-            redis.call('SADD', KEYS[6], ARGV[6])
             return 1
             """;
 
     private final RedisClient client;
     private final JobSerializer serializer;
+    private final String queueRegistryKey;
 
     public RedisJobSubmissionStore(RedisClient client, JobSerializer serializer) {
+        this(client, serializer, RedisQueueRegistry.REDIS_KEY);
+    }
+
+    RedisJobSubmissionStore(RedisClient client, JobSerializer serializer, String queueRegistryKey) {
         this.client = Objects.requireNonNull(client, "RedisClient cannot be null");
         this.serializer = Objects.requireNonNull(serializer, "JobSerializer cannot be null");
+        this.queueRegistryKey = Objects.requireNonNull(queueRegistryKey, "Queue registry key cannot be null");
     }
 
     @Override
@@ -94,7 +101,7 @@ public class RedisJobSubmissionStore implements JobSubmissionStore {
                             RedisPriorityQueueStore.sequenceKey(queueName),
                             RedisPriorityQueueStore.queueKey(queueName),
                             RedisPriorityQueueStore.membersKey(queueName),
-                            RedisQueueRegistry.REDIS_KEY
+                            queueRegistryKey
                     ),
                     List.of(
                             json,
