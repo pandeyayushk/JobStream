@@ -3,6 +3,7 @@ package io.github.pandeyayushk.jobstream.retry;
 import io.github.pandeyayushk.jobstream.job.Job;
 import io.github.pandeyayushk.jobstream.job.JobId;
 import io.github.pandeyayushk.jobstream.job.JobStatus;
+import io.github.pandeyayushk.jobstream.metrics.JobMetrics;
 import io.github.pandeyayushk.jobstream.queue.RedisPriorityQueueStore;
 import io.github.pandeyayushk.jobstream.queue.RedisQueueRegistry;
 import io.github.pandeyayushk.jobstream.serialization.JobSerializer;
@@ -88,18 +89,36 @@ public class RedisDeadLetterQueue implements DeadLetterQueue {
     private final RedisClient client;
     private final JobSerializer serializer;
     private final String queueRegistryKey;
+    private final JobMetrics metrics;
 
     public RedisDeadLetterQueue(
             RedisClient client,
             JobSerializer serializer
     ) {
-        this(client, serializer, RedisPriorityQueueStore.queueRegistryKey());
+        this(client, serializer, RedisPriorityQueueStore.queueRegistryKey(), JobMetrics.noop());
+    }
+
+    public RedisDeadLetterQueue(
+            RedisClient client,
+            JobSerializer serializer,
+            JobMetrics metrics
+    ) {
+        this(client, serializer, RedisPriorityQueueStore.queueRegistryKey(), metrics);
     }
 
     RedisDeadLetterQueue(
             RedisClient client,
             JobSerializer serializer,
             String queueRegistryKey
+    ) {
+        this(client, serializer, queueRegistryKey, JobMetrics.noop());
+    }
+
+    RedisDeadLetterQueue(
+            RedisClient client,
+            JobSerializer serializer,
+            String queueRegistryKey,
+            JobMetrics metrics
     ) {
         if (client == null) {
             throw new IllegalArgumentException("Redis client cannot be null");
@@ -114,6 +133,7 @@ public class RedisDeadLetterQueue implements DeadLetterQueue {
         this.queueRegistryKey = java.util.Objects.requireNonNull(
                 queueRegistryKey, "Queue registry key cannot be null"
         );
+        this.metrics = java.util.Objects.requireNonNull(metrics, "JobMetrics cannot be null");
     }
 
 
@@ -168,6 +188,7 @@ public class RedisDeadLetterQueue implements DeadLetterQueue {
                                 : "Incompatible Redis key types while moving job to dead letter queue"
                 );
             }
+            JobMetrics.recordSafely(metrics::recordJobMovedToDlq);
         } catch (JedisException e) {
             throw new RetryException("Failed to move job to dead letter queue", e);
         }

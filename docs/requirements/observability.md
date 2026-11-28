@@ -2,7 +2,7 @@
 
 ## Purpose and status
 
-Specify Phase 9 operational metrics and inspection. The requirements are finalized; metrics are not implemented yet. The JDK server currently provides live/ready health routes, and `QueueRegistry` provides Redis-backed queue discovery for future gauges and the queue endpoint. Worker retry backoff remains process-local, CLI scheduling flags remain absent, and scheduler-poller runtime bootstrap remains deferred from Phase 8.
+Specify Phase 9 operational metrics and inspection. The five process-local counters described below are implemented. The JDK server currently provides live/ready health routes, and `QueueRegistry` provides Redis-backed queue discovery for future gauges and the queue endpoint. The Redis-backed gauges and `GET /metrics` endpoint are still pending. Worker retry backoff remains process-local, CLI scheduling flags remain absent, and scheduler-poller runtime bootstrap remains deferred from Phase 8.
 
 ## Counters
 
@@ -32,7 +32,7 @@ Execution latency and queue waiting latency are out of scope. The Job record has
 
 ## Storage and consistency
 
-Use process-local `LongAdder`-style counters. Do not write Redis on hot job lifecycle paths in Phase 9. Local counters are thread-safe but snapshots across several counters are not a single consistent point in time. Redis-backed counters could aggregate across processes but couple processing to Redis writes and can still diverge from Job commits unless every lifecycle script is expanded. A hybrid adds duplicate semantics without a current requirement and is not selected.
+Use process-local `LongAdder` counters exposed through `JobMetrics`; snapshots are immutable and provide the five stable metric names in deterministic order. Do not write Redis on hot job lifecycle paths in Phase 9. Local counters are thread-safe but snapshots across several counters are not a single consistent point in time. Redis-backed counters could aggregate across processes but couple processing to Redis writes and can still diverge from Job commits unless every lifecycle script is expanded. A hybrid adds duplicate semantics without a current requirement and is not selected. This counter implementation is complete; the metrics HTTP representation and Redis-backed gauges remain pending.
 
 Counter values reset at process restart and are per instance. A crash between durable operation and local increment can omit an event; this is accepted for best-effort telemetry. Metrics failures never cause submission, execution, retry, or DLQ handling to fail. Redis gauge failures surface only to the API caller as 503.
 

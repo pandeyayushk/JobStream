@@ -5,11 +5,14 @@ import io.github.pandeyayushk.jobstream.executor.ExecutionResult;
 import io.github.pandeyayushk.jobstream.job.Job;
 import io.github.pandeyayushk.jobstream.job.JobId;
 import io.github.pandeyayushk.jobstream.job.JobStatus;
+import io.github.pandeyayushk.jobstream.metrics.JobMetrics;
+import io.github.pandeyayushk.jobstream.metrics.ProcessLocalJobMetrics;
 import io.github.pandeyayushk.jobstream.payload.Payload;
 import io.github.pandeyayushk.jobstream.persistence.JobRepository;
 import io.github.pandeyayushk.jobstream.queue.JobQueue;
 import io.github.pandeyayushk.jobstream.retry.NoOpDeadLetterQueue;
 import io.github.pandeyayushk.jobstream.retry.NoRetryPolicy;
+import io.github.pandeyayushk.jobstream.retry.RetryPolicy;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -19,12 +22,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.function.Consumer;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -104,13 +107,16 @@ class WorkerTest {
         queue.enqueue(job.id(), "default");
 
         CountDownLatch handled = new CountDownLatch(1);
+        ProcessLocalJobMetrics metrics = new ProcessLocalJobMetrics();
 
-        Worker worker = createWorker(
+        Worker worker = createWorkerWithMetrics(
                 queue,
                 repository,
                 new TestRegistry(),
                 processedJob -> handled.countDown(),
-                WorkerConfig.defaults()
+                WorkerConfig.defaults(),
+                new NoRetryPolicy(),
+                metrics
         );
 
         worker.start();
@@ -125,6 +131,75 @@ class WorkerTest {
                         .orElseThrow()
                         .status()
         );
+        assertEquals(1, metrics.snapshot().jobsCompletedTotal());
+    }
+
+    @Test
+    void completedCounterIncrementsOnlyAfterCompletionPersistenceSucceeds() throws Exception {
+        TestQueue queue = new TestQueue();
+        TestRepository repository = new TestRepository();
+        Job job = queuedJob();
+        repository.save(job);
+        repository.failOnStatus = JobStatus.COMPLETED;
+        queue.enqueue(job.id(), "default");
+        ProcessLocalJobMetrics metrics = new ProcessLocalJobMetrics();
+        Worker worker = createWorkerWithMetrics(queue, repository, new TestRegistry(),
+                processedJob -> { }, WorkerConfig.defaults(), new NoRetryPolicy(), metrics);
+
+        worker.start();
+        assertTrue(repository.saveFailure.await(3, TimeUnit.SECONDS));
+        assertEquals(0, metrics.snapshot().jobsCompletedTotal());
+    }
+
+    @Test
+    void retryableFailureCountsFailedAttemptAndRetryDecisionAfterTheirSaves() throws Exception {
+        TestQueue queue = new TestQueue();
+        TestRepository repository = new TestRepository();
+        Job job = queuedJob();
+        repository.save(job);
+        queue.enqueue(job.id(), "default");
+        ProcessLocalJobMetrics metrics = new ProcessLocalJobMetrics();
+        CountDownLatch retryDecisionRecorded = new CountDownLatch(1);
+        RetryPolicy retryPolicy = new RetryPolicy() {
+            @Override public boolean shouldRetry(Job failedJob, Throwable cause) { return true; }
+            @Override public Duration computeBackoff(Job retryingJob) {
+                retryDecisionRecorded.countDown();
+                return Duration.ofDays(1);
+            }
+        };
+        Worker worker = createWorkerWithMetrics(queue, repository, new TestRegistry(),
+                processedJob -> { throw new IllegalStateException("temporary failure"); },
+                WorkerConfig.defaults(), retryPolicy, metrics);
+
+        worker.start();
+        assertTrue(repository.retryingJobSaved.await(3, TimeUnit.SECONDS));
+        assertTrue(retryDecisionRecorded.await(3, TimeUnit.SECONDS));
+        assertEquals(1, metrics.snapshot().jobsFailedTotal());
+        assertEquals(1, metrics.snapshot().jobsRetriedTotal());
+    }
+
+    @Test
+    void failedRetryPersistenceDoesNotIncrementRetryDecisionCounter() throws Exception {
+        TestQueue queue = new TestQueue();
+        TestRepository repository = new TestRepository();
+        Job job = queuedJob();
+        repository.save(job);
+        repository.failOnStatus = JobStatus.RETRYING;
+        queue.enqueue(job.id(), "default");
+        ProcessLocalJobMetrics metrics = new ProcessLocalJobMetrics();
+        RetryPolicy retryPolicy = new RetryPolicy() {
+            @Override public boolean shouldRetry(Job failedJob, Throwable cause) { return true; }
+            @Override public Duration computeBackoff(Job retryingJob) { return Duration.ZERO; }
+        };
+        Worker worker = createWorkerWithMetrics(queue, repository, new TestRegistry(),
+                processedJob -> { throw new IllegalStateException("temporary failure"); },
+                WorkerConfig.defaults(), retryPolicy, metrics);
+
+        worker.start();
+        assertTrue(repository.saveFailure.await(3, TimeUnit.SECONDS));
+
+        assertEquals(1, metrics.snapshot().jobsFailedTotal());
+        assertEquals(0, metrics.snapshot().jobsRetriedTotal());
     }
 
     @Test
@@ -639,6 +714,19 @@ class WorkerTest {
             Consumer<Job> handler,
             WorkerConfig config
     ) {
+        return createWorkerWithMetrics(queue, repository, registry, handler, config,
+                new NoRetryPolicy(), JobMetrics.noop());
+    }
+
+    private Worker createWorkerWithMetrics(
+            JobQueue queue,
+            JobRepository repository,
+            WorkerRegistry registry,
+            Consumer<Job> handler,
+            WorkerConfig config,
+            io.github.pandeyayushk.jobstream.retry.RetryPolicy retryPolicy,
+            io.github.pandeyayushk.jobstream.metrics.JobMetrics metrics
+    ) {
         DefaultExecutorRegistry executorRegistry =
                 new DefaultExecutorRegistry();
 
@@ -656,9 +744,10 @@ class WorkerTest {
                 repository,
                 registry,
                 executorRegistry,
-                new NoRetryPolicy(),
+                retryPolicy,
                 new NoOpDeadLetterQueue(),
-                config
+                config,
+                metrics
         );
 
         workers.add(worker);
@@ -760,9 +849,17 @@ class WorkerTest {
         private final Map<JobId, Job> jobs =
                 new ConcurrentHashMap<>();
         private final CountDownLatch failedJobSaved = new CountDownLatch(1);
+        private final CountDownLatch retryingJobSaved = new CountDownLatch(1);
+        private final CountDownLatch saveFailure = new CountDownLatch(1);
+        private volatile JobStatus failOnStatus;
 
         @Override
         public Job save(Job job) {
+            if (job.status() == failOnStatus) {
+                failOnStatus = null;
+                saveFailure.countDown();
+                throw new IllegalStateException("Simulated persistence failure");
+            }
             Job current = jobs.get(job.id());
             if ((current == null && job.revision() != 0)
                     || (current != null && current.revision() != job.revision())) {
@@ -772,6 +869,9 @@ class WorkerTest {
             jobs.put(job.id(), persisted);
             if (persisted.status() == JobStatus.FAILED) {
                 failedJobSaved.countDown();
+            }
+            if (persisted.status() == JobStatus.RETRYING) {
+                retryingJobSaved.countDown();
             }
             return persisted;
         }

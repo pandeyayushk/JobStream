@@ -2,18 +2,25 @@ package io.github.pandeyayushk.jobstream.queue;
 
 import io.github.pandeyayushk.jobstream.job.Job;
 import io.github.pandeyayushk.jobstream.job.JobStatus;
+import io.github.pandeyayushk.jobstream.metrics.JobMetrics;
 
 import java.util.Objects;
 
 public class QueueCoordinatorImp implements QueueCoordinator {
 
     private final JobSubmissionStore submissionStore;
+    private final JobMetrics metrics;
 
     public QueueCoordinatorImp(JobSubmissionStore submissionStore) {
+        this(submissionStore, JobMetrics.noop());
+    }
+
+    public QueueCoordinatorImp(JobSubmissionStore submissionStore, JobMetrics metrics) {
         this.submissionStore = Objects.requireNonNull(
                 submissionStore,
                 "JobSubmissionStore cannot be null"
         );
+        this.metrics = Objects.requireNonNull(metrics, "JobMetrics cannot be null");
     }
 
     @Override
@@ -28,6 +35,8 @@ public class QueueCoordinatorImp implements QueueCoordinator {
 
         Job queuedJob = job.withStatus(JobStatus.QUEUED);
 
-        return submissionStore.submit(job, queuedJob, queueName);
+        Job persisted = submissionStore.submit(job, queuedJob, queueName);
+        JobMetrics.recordSafely(metrics::recordJobSubmitted);
+        return persisted;
     }
 }

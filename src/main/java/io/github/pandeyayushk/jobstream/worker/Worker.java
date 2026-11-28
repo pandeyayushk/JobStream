@@ -6,6 +6,7 @@ import io.github.pandeyayushk.jobstream.executor.JobExecutor;
 import io.github.pandeyayushk.jobstream.job.Job;
 import io.github.pandeyayushk.jobstream.job.JobId;
 import io.github.pandeyayushk.jobstream.job.JobStatus;
+import io.github.pandeyayushk.jobstream.metrics.JobMetrics;
 import io.github.pandeyayushk.jobstream.persistence.JobRepository;
 import io.github.pandeyayushk.jobstream.queue.JobQueue;
 import io.github.pandeyayushk.jobstream.retry.DeadLetterQueue;
@@ -33,6 +34,7 @@ public class Worker {
     private final WorkerConfig config;
     private final RetryPolicy retryPolicy;
     private final DeadLetterQueue deadLetterQueue;
+    private final JobMetrics metrics;
 
     private volatile WorkerStatus status;
 
@@ -54,6 +56,21 @@ public class Worker {
             RetryPolicy retryPolicy,
             DeadLetterQueue deadLetterQueue,
             WorkerConfig config
+    ) {
+        this(workerId, queue, jobRepository, workerRegistry, executorRegistry,
+                retryPolicy, deadLetterQueue, config, JobMetrics.noop());
+    }
+
+    public Worker(
+            WorkerId workerId,
+            JobQueue queue,
+            JobRepository jobRepository,
+            WorkerRegistry workerRegistry,
+            ExecutorRegistry executorRegistry,
+            RetryPolicy retryPolicy,
+            DeadLetterQueue deadLetterQueue,
+            WorkerConfig config,
+            JobMetrics metrics
     ) {
         this.workerId = Objects.requireNonNull(
                 workerId,
@@ -94,6 +111,7 @@ public class Worker {
                 config,
                 "WorkerConfig cannot be null"
         );
+        this.metrics = Objects.requireNonNull(metrics, "JobMetrics cannot be null");
 
         this.status = WorkerStatus.STOPPED;
     }
@@ -443,6 +461,7 @@ public class Worker {
                         );
 
                 jobRepository.save(completedJob);
+                JobMetrics.recordSafely(metrics::recordJobCompleted);
                 return;
             }
 
@@ -478,6 +497,7 @@ public class Worker {
                 .withMetadata("failure.reason", reason);
 
         failedJob = jobRepository.save(failedJob);
+        JobMetrics.recordSafely(metrics::recordJobFailed);
 
         return failedJob;
     }
@@ -526,6 +546,7 @@ public class Worker {
                 failedJob.withRetryAttempt(reason);
 
         retryingJob = jobRepository.save(retryingJob);
+        JobMetrics.recordSafely(metrics::recordJobRetried);
 
         Duration backoff;
 

@@ -2,6 +2,8 @@ package io.github.pandeyayushk.jobstream.cli;
 
 import io.github.pandeyayushk.jobstream.persistence.JobRepository;
 import io.github.pandeyayushk.jobstream.persistence.RedisJobRepository;
+import io.github.pandeyayushk.jobstream.metrics.JobMetrics;
+import io.github.pandeyayushk.jobstream.metrics.ProcessLocalJobMetrics;
 import io.github.pandeyayushk.jobstream.queue.JobQueue;
 import io.github.pandeyayushk.jobstream.queue.QueueCoordinator;
 import io.github.pandeyayushk.jobstream.queue.QueueCoordinatorImp;
@@ -20,6 +22,7 @@ public final class CliContext implements AutoCloseable {
 
     private final String host;
     private final int port;
+    private final JobMetrics jobMetrics = new ProcessLocalJobMetrics();
 
     private RedisClient client;
     private JobRepository jobRepository;
@@ -70,6 +73,10 @@ public final class CliContext implements AutoCloseable {
         return deadLetterQueue;
     }
 
+    public JobMetrics jobMetrics() {
+        return jobMetrics;
+    }
+
     private void initialize() {
         if (client != null) {
             return;
@@ -93,7 +100,7 @@ public final class CliContext implements AutoCloseable {
                             serializer
                     );
 
-            queueCoordinator = new QueueCoordinatorImp(submissionStore);
+            queueCoordinator = new QueueCoordinatorImp(submissionStore, jobMetrics);
             jobQueue = new RedisJobQueue(created);
             workerRegistry = new RedisWorkerRegistry(
                     created,
@@ -101,7 +108,8 @@ public final class CliContext implements AutoCloseable {
             );
             deadLetterQueue = new RedisDeadLetterQueue(
                     created,
-                    serializer
+                    serializer,
+                    jobMetrics
             );
             client = created;
         } catch (RuntimeException e) {

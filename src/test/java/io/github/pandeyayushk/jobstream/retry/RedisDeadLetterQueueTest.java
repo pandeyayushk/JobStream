@@ -2,6 +2,7 @@ package io.github.pandeyayushk.jobstream.retry;
 
 import io.github.pandeyayushk.jobstream.job.Job;
 import io.github.pandeyayushk.jobstream.job.JobStatus;
+import io.github.pandeyayushk.jobstream.metrics.ProcessLocalJobMetrics;
 import io.github.pandeyayushk.jobstream.payload.Payload;
 import io.github.pandeyayushk.jobstream.persistence.RedisJobRepository;
 import io.github.pandeyayushk.jobstream.queue.RedisJobQueue;
@@ -21,6 +22,7 @@ class RedisDeadLetterQueueTest {
     private RedisClient client;
     private RedisJobRepository repository;
     private RedisDeadLetterQueue deadLetterQueue;
+    private ProcessLocalJobMetrics metrics;
 
     @BeforeEach
     void setUp() {
@@ -31,6 +33,7 @@ class RedisDeadLetterQueueTest {
         client.flushDB();
 
         JacksonJobSerializer serializer = new JacksonJobSerializer();
+        metrics = new ProcessLocalJobMetrics();
 
         repository = new RedisJobRepository(
                 client,
@@ -39,7 +42,8 @@ class RedisDeadLetterQueueTest {
 
         deadLetterQueue = new RedisDeadLetterQueue(
                 client,
-                serializer
+                serializer,
+                metrics
         );
     }
 
@@ -92,6 +96,7 @@ class RedisDeadLetterQueueTest {
         assertEquals(JobStatus.FAILED, restored.status());
         assertEquals("winner", restored.metadata().get("concurrent"));
         assertEquals(0, deadLetterQueue.size());
+        assertEquals(0, metrics.snapshot().jobsMovedToDlqTotal());
     }
 
     @Test
@@ -449,6 +454,22 @@ class RedisDeadLetterQueueTest {
 
         assertEquals(17, requeued.priority());
         assertEquals(Optional.of(failed.id()), activeQueue.dequeueNonBlocking("default"));
+        assertEquals(1, metrics.snapshot().jobsMovedToDlqTotal());
+    }
+
+    @Test
+    void movingToDlqCountsOnceAndRequeueingOutDoesNotCountAgain() {
+        Job failed = Job.create("test-job", Payload.empty())
+                .withStatus(JobStatus.QUEUED)
+                .withStatus(JobStatus.PROCESSING)
+                .withStatus(JobStatus.FAILED);
+        failed = repository.save(failed);
+
+        deadLetterQueue.moveToDeadLetter(failed, "permanent failure");
+        assertEquals(1, metrics.snapshot().jobsMovedToDlqTotal());
+
+        deadLetterQueue.requeue(failed.id(), "manual-requeue").orElseThrow();
+        assertEquals(1, metrics.snapshot().jobsMovedToDlqTotal());
     }
 
 

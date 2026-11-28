@@ -2,6 +2,8 @@ package io.github.pandeyayushk.jobstream.queue;
 
 import io.github.pandeyayushk.jobstream.job.Job;
 import io.github.pandeyayushk.jobstream.job.JobStatus;
+import io.github.pandeyayushk.jobstream.metrics.JobMetrics;
+import io.github.pandeyayushk.jobstream.metrics.ProcessLocalJobMetrics;
 import io.github.pandeyayushk.jobstream.payload.Payload;
 import org.junit.jupiter.api.Test;
 
@@ -62,6 +64,43 @@ public class QueueCoordinatorImpTest {
                 originalJob.id(),
                 store.queuedJob.id()
         );
+    }
+
+    @Test
+    public void successfulSubmissionRecordsOnceAfterReturningPersistedSnapshot() {
+        RecordingSubmissionStore store = new RecordingSubmissionStore();
+        ProcessLocalJobMetrics metrics = new ProcessLocalJobMetrics();
+        QueueCoordinatorImp coordinator = new QueueCoordinatorImp(store, metrics);
+
+        Job persisted = coordinator.submit(Job.create("email", Payload.empty()), "default");
+
+        assertEquals(JobStatus.QUEUED, persisted.status());
+        assertEquals(1, metrics.snapshot().jobsSubmittedTotal());
+    }
+
+    @Test
+    public void failedSubmissionAndFaultyMetricsDoNotChangeSubmissionOutcome() {
+        JobMetrics faultyMetrics = new JobMetrics() {
+            @Override public void recordJobSubmitted() { throw new IllegalStateException("metrics failed"); }
+            @Override public void recordJobCompleted() { }
+            @Override public void recordJobFailed() { }
+            @Override public void recordJobRetried() { }
+            @Override public void recordJobMovedToDlq() { }
+            @Override public io.github.pandeyayushk.jobstream.metrics.JobMetricsSnapshot snapshot() {
+                return new io.github.pandeyayushk.jobstream.metrics.JobMetricsSnapshot(0, 0, 0, 0, 0);
+            }
+        };
+        QueueCoordinatorImp successful = new QueueCoordinatorImp(new RecordingSubmissionStore(), faultyMetrics);
+        assertDoesNotThrow(() -> successful.submit(Job.create("email", Payload.empty()), "default"));
+
+        JobSubmissionStore failingStore = (original, queued, queue) -> {
+            throw new QueueException("persistence failed");
+        };
+        ProcessLocalJobMetrics metrics = new ProcessLocalJobMetrics();
+        QueueCoordinatorImp failing = new QueueCoordinatorImp(failingStore, metrics);
+        assertThrows(QueueException.class,
+                () -> failing.submit(Job.create("email", Payload.empty()), "default"));
+        assertEquals(0, metrics.snapshot().jobsSubmittedTotal());
     }
 
     @Test

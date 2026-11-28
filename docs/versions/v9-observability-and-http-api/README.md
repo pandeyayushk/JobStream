@@ -1,6 +1,6 @@
 # Phase 9 — Observability & HTTP API
 
-**Status: Specification finalized; Jackson/API foundations, the embedded health server, and the Redis queue registry/backfill are implemented.** Metrics and the remaining management API endpoints are still pending. This document separates current capabilities from remaining planned work and deferred integrations.
+**Status: Process-local job counters, the Jackson/API foundations, embedded health server, and Redis queue registry/backfill are implemented.** Redis-backed gauges and the remaining management API endpoints are still pending. This document separates current capabilities from remaining planned work and deferred integrations.
 
 ## Existing capabilities and constraints
 
@@ -20,7 +20,7 @@ Version support: Phase 9 Step 1 selected Jackson 3.3.0, published on the active 
 
 ## Metrics architecture and semantics
 
-Use process-local thread-safe counters (for example, `LongAdder`) behind `JobMetrics`. Values reset at restart and are per process, not cluster-wide or durable. Instrument only after the durable operation succeeds:
+Use process-local thread-safe `LongAdder` counters behind `JobMetrics`. `ProcessLocalJobMetrics` is injected into the submission coordinator, Worker lifecycle, and DLQ mover through process composition; values reset at restart and are per process, not cluster-wide or durable. Its immutable snapshot exposes all five counters in deterministic order. Instrument only after the durable operation succeeds:
 
 | Counter | Increment point | Meaning |
 |---|---|---|
@@ -32,7 +32,7 @@ Use process-local thread-safe counters (for example, `LongAdder`) behind `JobMet
 
 A retry intentionally contributes one failed attempt and one retry decision, not another submission. Metrics are best effort: process crash between job persistence and local increment can omit an event. These are not audit or billing records. Recording must be non-throwing and cannot fail job processing. Redis-backed counters would aggregate instances but add hot-path Redis coupling and still diverge from Job writes unless lifecycle scripts were expanded; hybrid counters add unnecessary duplicate semantics.
 
-Gauges are read on request: per-queue/total depth via `JobQueue.size` for registered names, active registration count via `WorkerRegistry.listActiveWorkers`. Processing/idle gauges are unavailable. Execution and queue-wait latency are out of scope: no per-attempt timestamps or `queuedAt` exist, and `updatedAt` is overwritten at transitions. Do not infer latency from `createdAt` or `updatedAt`.
+Counter infrastructure and lifecycle instrumentation are implemented. Gauges are planned to be read on request: per-queue/total depth via `JobQueue.size` for registered names, active registration count via `WorkerRegistry.listActiveWorkers`. Processing/idle gauges are unavailable. Execution and queue-wait latency are out of scope: no per-attempt timestamps or `queuedAt` exist, and `updatedAt` is overwritten at transitions. Do not infer latency from `createdAt` or `updatedAt`.
 
 `GET /metrics` returns JSON counters and gauges. Gauge reads need Redis; on failure return 503 rather than a misleading partial snapshot. Counter recording does not need Redis.
 
@@ -88,18 +88,18 @@ Bind to `127.0.0.1` by default; non-loopback bind requires explicit configuratio
 
 ## Phase boundary
 
-Implemented infrastructure: Jackson 3.3.0 and API configuration/error foundation; JDK HTTP server lifecycle and live/ready health routes; Redis queue registry with atomic insertion registration and legacy-key backfill. Pending Phase 9 work: process-local counters, Redis gauge endpoint, and job/queue/worker/DLQ handlers. Deferred: Worker retry-to-Redis scheduler integration; CLI priority/delay flags; production poller bootstrap; cancellation; latency metrics; Prometheus exposition; durable cluster-wide counters; worker heartbeat timestamps/processing counts; built-in auth/public exposure.
+Implemented infrastructure: Jackson 3.3.0 and API configuration/error foundation; JDK HTTP server lifecycle and live/ready health routes; Redis queue registry with atomic insertion registration and legacy-key backfill; process-local counters instrumented at successful submission, completion, failed-attempt, retry-persistence, and DLQ-move boundaries. Pending Phase 9 work: Redis gauge endpoint and job/queue/worker/DLQ handlers. Deferred: Worker retry-to-Redis scheduler integration; CLI priority/delay flags; production poller bootstrap; cancellation; latency metrics; Prometheus exposition; durable cluster-wide counters; worker heartbeat timestamps/processing counts; built-in auth/public exposure.
 
 ## Implementation sequence
 
 1. **Complete:** Upgrade and pin supported Jackson 3.3.0; verify compatibility with existing serialized Job records and tests.
 2. **Complete:** Add immutable `ApiConfig` defaults and validation, stable API error codes/statuses, safe JSON error envelope, and shared Jackson codec.
 3. **Complete:** Implement `QueueRegistry` Redis Set, atomic registration in every queue insertion Lua path, and idempotent cursor-based SCAN backfill.
-4. Add process-local counters and instrument successful submit, completion, failed attempt, retry decision, and DLQ move boundaries. Enforce non-throwing metric recording.
+4. **Complete:** Add process-local counters and instrument successful submit, completion, failed attempt, retry decision, and DLQ move boundaries. Enforce non-throwing metric recording.
 5. **Complete:** Add JDK HTTP server, bounded executor, lifecycle, shared Jackson 3 JSON handling, safe errors, and live/ready health probes. Management routes remain in Step 6.
 6. Add job submit/read, queue/worker inspection, and DLQ list/requeue handlers.
 7. Add JSON metrics with Redis-backed gauge reads.
-8. Add counter, registry, real-Redis, and HTTP integration tests, including errors, Redis outage, limits, and shutdown.
+8. Add management endpoint tests for counters, registry, real-Redis behavior, and HTTP integration, including errors, Redis outage, limits, and shutdown. Counter unit and lifecycle tests are already part of Step 4.
 9. Review dependency tree, security boundaries, documentation, and Phase 8 deferred scope.
 
 ## References
